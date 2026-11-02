@@ -1,4 +1,5 @@
-﻿const demands = [
+import Link from "next/link";
+const demands = [
   {
     id: "DEMO-001",
     crop: "Tomato",
@@ -56,12 +57,12 @@ export default function BuyerDashboard() {
               Manage your produce requirements and track your purchase demands.
             </p>
           </div>
-          <a
+          <Link
             href="/buyer/dashboard/demands/new"
             className="inline-flex items-center justify-center rounded-lg bg-green-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-green-800"
           >
             + Create New Demand
-          </a>
+          </Link>
         </section>
 
         <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -94,12 +95,12 @@ export default function BuyerDashboard() {
                 Overview of your recent produce requirements
               </p>
             </div>
-            <a
+            <Link
               href="/buyer/dashboard/demands"
               className="text-sm font-semibold text-green-700 hover:text-green-900"
             >
               View all demands →
-            </a>
+            </Link>
           </div>
 
           <div className="overflow-x-auto">
