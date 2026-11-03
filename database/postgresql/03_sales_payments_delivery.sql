@@ -37,7 +37,11 @@ CREATE TABLE sales (
             'REFUNDED'
         )),
 
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+cancelled_at TIMESTAMPTZ,
+
+cancellation_reason TEXT
 );
 
 
