@@ -1,149 +1,100 @@
+﻿"use client";
+
 import Link from "next/link";
-const demands = [
-  {
-    id: "DEMO-001",
-    crop: "Tomato",
-    quantity: "500 kg",
-    grade: "A",
-    price: "INR 25/kg",
-    status: "Active",
-  },
-  {
-    id: "DEMO-002",
-    crop: "Onion",
-    quantity: "300 kg",
-    grade: "B",
-    price: "INR 30/kg",
-    status: "Pending",
-  },
-  {
-    id: "DEMO-003",
-    crop: "Potato",
-    quantity: "200 kg",
-    grade: "A",
-    price: "INR 22/kg",
-    status: "Fulfilled",
-  },
-];
+import { useEffect, useState } from "react";
 
-const stats = [
-  { label: "Total demands", value: "03", detail: "Sample records", icon: "ALL" },
-  { label: "Active demands", value: "01", detail: "Currently open", icon: "OPEN" },
-  { label: "Fulfilled quantity", value: "200 kg", detail: "Sample records", icon: "DONE" },
-  { label: "Pending demands", value: "01", detail: "Awaiting action", icon: "!" },
-];
+type Demand = {
+  id: string;
+  crop: string;
+  quantity: string;
+  remaining_quantity: string;
+  grade: string | null;
+  max_price: string | null;
+  status: string;
+  unit: string;
+};
 
-export default function BuyerDashboard() {
+export default function BuyerDashboardPage() {
+  const [demands, setDemands] = useState<Demand[]>([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/buyer/demands")
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || "Could not load demands");
+        setDemands(data.demands || []);
+      })
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const fulfilled = demands.reduce(
+    (sum, demand) => sum + Number(demand.quantity) - Number(demand.remaining_quantity), 0
+  );
+
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+    <main className="min-h-screen bg-slate-50 px-5 py-10 text-slate-900">
+      <div className="mx-auto max-w-7xl">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <p className="text-xl font-bold text-green-800">Smart Mandi</p>
-            <p className="text-xs text-slate-500">Local Farmer Market Platform</p>
+            <p className="text-sm font-semibold text-green-700">SMART MANDI</p>
+            <h1 className="mt-2 text-3xl font-bold">Buyer Dashboard</h1>
+            <p className="mt-2 text-slate-500">Manage your produce requirements.</p>
           </div>
-          <span className="rounded-full bg-green-50 px-4 py-2 text-sm font-medium text-green-800">
-            Buyer Dashboard
-          </span>
-        </div>
-      </header>
-
-      <div className="mx-auto max-w-7xl px-6 py-10">
-        <section className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
-          <div>
-            <p className="mb-2 text-sm font-medium text-green-700">BUYER PORTAL</p>
-            <h1 className="text-3xl font-bold tracking-tight">Welcome, Buyer!</h1>
-            <p className="mt-2 text-slate-500">
-              Manage your produce requirements and track your purchase demands.
-            </p>
-          </div>
-          <Link
-            href="/buyer/dashboard/demands/new"
-            className="inline-flex items-center justify-center rounded-lg bg-green-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-green-800"
-          >
+          <Link href="/buyer/dashboard/demands/new" className="rounded-lg bg-green-700 px-5 py-3 text-sm font-semibold text-white hover:bg-green-800">
             + Create New Demand
           </Link>
-        </section>
-
-        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Demo mode: The figures and demand records below are sample data, not saved buyer records.
         </div>
 
-        <section className="mb-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {stats.map((stat) => (
-            <article
-              key={stat.label}
-              className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
-            >
-              <div className="mb-4 flex items-center justify-between">
-                <p className="text-sm font-medium text-slate-500">{stat.label}</p>
-                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-50 text-lg text-green-700">
-                  {stat.icon}
-                </span>
-              </div>
-              <p className="text-2xl font-bold">{stat.value}</p>
-              <p className="mt-1 text-xs text-slate-400">{stat.detail}</p>
+        <section className="mt-8 grid gap-4 sm:grid-cols-3">
+          {[
+            ["Total demands", demands.length],
+            ["Open demands", demands.filter(d => d.status === "OPEN" || d.status === "PARTIALLY_FULFILLED").length],
+            ["Fulfilled quantity", `${fulfilled.toFixed(2)} kg`]
+          ].map(([label, value]) => (
+            <article key={String(label)} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <p className="text-sm text-slate-500">{label}</p>
+              <p className="mt-2 text-2xl font-bold">{value}</p>
             </article>
           ))}
         </section>
 
-        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-col justify-between gap-3 border-b border-slate-200 px-6 py-5 sm:flex-row sm:items-center">
-            <div>
-              <h2 className="text-lg font-bold">Recent Demands</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Overview of your recent produce requirements
-              </p>
-            </div>
-            <Link
-              href="/buyer/dashboard/demands"
-              className="text-sm font-semibold text-green-700 hover:text-green-900"
-            >
-              View all demands &gt;
-            </Link>
+        <section className="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-bold">Recent demands</h2>
+            <Link href="/buyer/dashboard/demands" className="text-sm font-semibold text-green-700 hover:underline">View all demands &gt;</Link>
           </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-6 py-4 font-semibold">Demand ID</th>
-                  <th className="px-6 py-4 font-semibold">Crop</th>
-                  <th className="px-6 py-4 font-semibold">Quantity</th>
-                  <th className="px-6 py-4 font-semibold">Grade</th>
-                  <th className="px-6 py-4 font-semibold">Max price</th>
-                  <th className="px-6 py-4 font-semibold">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {demands.map((demand) => (
-                  <tr key={demand.id} className="hover:bg-slate-50">
-                    <td className="whitespace-nowrap px-6 py-4 font-medium">{demand.id}</td>
-                    <td className="px-6 py-4">{demand.crop}</td>
-                    <td className="whitespace-nowrap px-6 py-4">{demand.quantity}</td>
-                    <td className="px-6 py-4">{demand.grade}</td>
-                    <td className="whitespace-nowrap px-6 py-4">{demand.price}</td>
-                    <td className="px-6 py-4">
-                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                        demand.status === "Active"
-                          ? "bg-green-100 text-green-800"
-                          : demand.status === "Fulfilled"
-                            ? "bg-blue-100 text-blue-800"
-                            : "bg-amber-100 text-amber-800"
-                      }`}>
-                        {demand.status}
-                      </span>
-                    </td>
+          {loading && <p className="py-8 text-slate-500">Loading demands...</p>}
+          {error && <p className="py-8 text-red-600">{error}</p>}
+          {!loading && !error && demands.length === 0 && <p className="py-8 text-slate-500">You have not created any demands yet.</p>}
+          {!loading && !error && demands.length > 0 && (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">ID</th><th className="px-4 py-3">Crop</th>
+                    <th className="px-4 py-3">Quantity</th><th className="px-4 py-3">Grade</th>
+                    <th className="px-4 py-3">Max price</th><th className="px-4 py-3">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {demands.slice(0, 5).map(d => (
+                    <tr key={d.id}>
+                      <td className="px-4 py-3"><Link className="font-semibold text-green-700 hover:underline" href={`/buyer/dashboard/demands/${d.id}`}>#{d.id}</Link></td>
+                      <td className="px-4 py-3">{d.crop}</td>
+                      <td className="px-4 py-3">{d.quantity} {d.unit}</td>
+                      <td className="px-4 py-3">{d.grade || "—"}</td>
+                      <td className="px-4 py-3">{d.max_price ? `INR ${d.max_price}` : "—"}</td>
+                      <td className="px-4 py-3">{d.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
-
-        <footer className="mt-8 text-center text-xs text-slate-400">
-          Smart Mandi Allocation System ┬╖ Buyer Module ┬╖ Development Preview
-        </footer>
       </div>
     </main>
   );
