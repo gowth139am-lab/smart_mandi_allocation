@@ -75,7 +75,9 @@ export default function FarmerDashboard() {
   const [editForm, setEditForm] = useState({ grade: "", expiryDate: "" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const mountedRef = useRef(false);
   const loadControllerRef = useRef<AbortController | null>(null);
 
@@ -90,6 +92,8 @@ export default function FarmerDashboard() {
       setFarms(data.farms);
       setCrops(data.crops);
       setShowFarmForm(data.farms.length === 0);
+      setLoadError("");
+      setHasLoaded(true);
       setForm((current) => ({
         ...current,
         farmId: data.farms.some((farm) => farm.id === current.farmId)
@@ -98,14 +102,13 @@ export default function FarmerDashboard() {
       }));
     } catch (reason) {
       if (controller.signal.aborted || !mountedRef.current) return;
-      setError(reason instanceof Error ? reason.message : "Could not load produce lots");
-      setShowFarmForm(farms.length === 0);
+      setLoadError(reason instanceof Error ? reason.message : "Could not load dashboard data");
     } finally {
       if (mountedRef.current && loadControllerRef.current === controller) {
         setLoading(false);
       }
     }
-  }, [farms.length]);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -121,6 +124,8 @@ export default function FarmerDashboard() {
         setFarms(data.farms);
         setCrops(data.crops);
         setShowFarmForm(data.farms.length === 0);
+        setLoadError("");
+        setHasLoaded(true);
         setForm((current) => ({
           ...current,
           farmId: data.farms.some((farm) => farm.id === current.farmId)
@@ -129,8 +134,7 @@ export default function FarmerDashboard() {
         }));
       } catch (reason) {
         if (!active || controller.signal.aborted) return;
-        setError(reason instanceof Error ? reason.message : "Could not load produce lots");
-        setShowFarmForm(true);
+        setLoadError(reason instanceof Error ? reason.message : "Could not load dashboard data");
       } finally {
         if (active && !controller.signal.aborted) setLoading(false);
       }
@@ -140,10 +144,16 @@ export default function FarmerDashboard() {
     return () => {
       active = false;
       mountedRef.current = false;
-      controller.abort();
-      if (loadControllerRef.current === controller) loadControllerRef.current = null;
+      loadControllerRef.current?.abort();
+      loadControllerRef.current = null;
     };
   }, []);
+
+  function retryDashboardLoad() {
+    setLoading(true);
+    setLoadError("");
+    void loadLots();
+  }
 
   async function createFarm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -249,9 +259,15 @@ export default function FarmerDashboard() {
         <section className="mt-7 rounded-xl border bg-white p-6 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-bold">{farms.length === 0 ? "Set up your farm" : "Farm management"}</h2>
+              <h2 className="text-xl font-bold">
+                {!hasLoaded
+                  ? "Farm data"
+                  : farms.length === 0 ? "Set up your farm" : "Farm management"}
+              </h2>
               <p className="mt-1 text-sm text-slate-600">
-                {farms.length === 0
+                {!hasLoaded
+                  ? "Farm setup will be available after your farm data loads."
+                  : farms.length === 0
                   ? "Create a farm before adding produce lots."
                   : `${farms.length} farm${farms.length === 1 ? "" : "s"} available for your produce lots.`}
               </p>
@@ -266,7 +282,7 @@ export default function FarmerDashboard() {
               </button>
             )}
           </div>
-          {showFarmForm && (
+          {hasLoaded && showFarmForm && (
             <form onSubmit={createFarm} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <label className="text-sm font-medium">Farm name
                 <input
@@ -341,7 +357,9 @@ export default function FarmerDashboard() {
 
         <section className="mt-7 rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="text-xl font-bold">Add produce lot</h2>
-          {farms.length === 0 ? (
+          {!hasLoaded ? (
+            <p className="mt-3 text-sm text-slate-600">Farm selection is unavailable until dashboard data loads.</p>
+          ) : farms.length === 0 ? (
             <p className="mt-3 text-sm text-slate-600">Create your farm above to enable produce-lot entry.</p>
           ) : (
           <form onSubmit={createLot} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -378,12 +396,25 @@ export default function FarmerDashboard() {
 
         {message && <p className="mt-5 rounded-lg bg-green-100 p-3 text-sm text-green-800">{message}</p>}
         {error && <p className="mt-5 rounded-lg bg-red-100 p-3 text-sm text-red-800">{error}</p>}
+        {loadError && (
+          <div role="alert" className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-red-100 p-3 text-sm text-red-800">
+            <span>Could not load farm and produce-lot data: {loadError}</span>
+            <button
+              type="button"
+              onClick={retryDashboardLoad}
+              disabled={loading}
+              className="rounded border border-red-700 px-3 py-1 font-semibold disabled:opacity-50"
+            >
+              {loading ? "Retrying..." : "Retry"}
+            </button>
+          </div>
+        )}
 
         <section className="mt-7 rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="text-xl font-bold">My produce lots</h2>
           {loading && <p className="py-8 text-slate-500">Loading inventory...</p>}
-          {!loading && lots.length === 0 && <p className="py-8 text-slate-500">No produce lots found.</p>}
-          {!loading && lots.length > 0 && (
+          {!loading && hasLoaded && lots.length === 0 && <p className="py-8 text-slate-500">No produce lots found.</p>}
+          {!loading && hasLoaded && lots.length > 0 && (
             <div className="mt-5 overflow-x-auto">
               <table className="w-full min-w-[950px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">

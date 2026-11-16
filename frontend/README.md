@@ -22,15 +22,16 @@ It also verifies the mismatch crop exists. Configure these values in the same
 PowerShell session before running the test:
 
 ```powershell
-$env:DATABASE_URL = "<PostgreSQL connection string>"
+$env:DATABASE_URL = "postgresql://<user>:<password>@localhost:5432/smart_mandi_test_quality"
 $env:MONGODB_URI = "<MongoDB connection string>"
-$env:MONGODB_DB = "smart_mandi_nosql"
+$env:MONGODB_DB = "smart_mandi_test_quality"
 $env:TEST_FARMER_COOKIE = "authjs.session-token=<farmer-session-token>"
 $env:TEST_OTHER_FARMER_COOKIE = "authjs.session-token=<second-farmer-session-token>"
 $env:TEST_BUYER_COOKIE = "authjs.session-token=<buyer-session-token>"
 $env:TEST_ADMIN_COOKIE = "authjs.session-token=<admin-session-token>"
 $env:TEST_FARMER_USER_ID = "<farmer users.user_id>"
 $env:TEST_OTHER_FARMER_USER_ID = "<different farmer users.user_id>"
+$env:TEST_BUYER_USER_ID = "<buyer users.user_id>"
 $env:TEST_ADMIN_USER_ID = "<admin users.user_id>"
 $env:TEST_OWN_LOT_ID = "<lot owned by the first farmer>"
 $env:TEST_OWN_CROP_ID = "<crop_id for that lot>"
@@ -52,6 +53,20 @@ own lot, and one by the admin on the second farmer's lot to exercise the admin
 override. It does not delete or reset MongoDB records. Use a disposable test
 database and fixtures matching the configured IDs.
 
+All integration scripts that can access or mutate database data reject a
+PostgreSQL database name or MongoDB database name that does not start with
+`smart_mandi_test_`. Never point them at `smart_mandi_db` or `smart_mandi_nosql`.
+The MongoDB API test also adds and removes three temporary compatibility
+observations in its disposable database.
+
+PostgreSQL IDs use signed `BIGINT`, so quality-observation `lot_id`, `crop_id`,
+and `inspector_id` are stored as BSON `Long` (signed 64-bit integer) and
+serialized over the API as decimal strings. The collection validator continues
+to accept existing numeric BSON `int`, `long`, and `double` observations.
+MongoDB numeric comparisons and report filters include those legacy numeric
+documents, while farmer lot scopes are built from exact PostgreSQL decimal
+strings and converted to BSON `Long` without JavaScript `Number` conversion.
+
 The farmer farm-management integration test also requires a running app,
 PostgreSQL, and authenticated farmer, second-farmer, and buyer cookies. Set
 `DATABASE_URL`, `TEST_FARMER_COOKIE`, `TEST_OTHER_FARMER_COOKIE`,
@@ -64,6 +79,10 @@ $env:TEST_OTHER_FARM_ID = "<farm owned by TEST_OTHER_FARMER_USER_ID>"
 $env:TEST_CROP_ID = "<existing crop_id>"
 npm run test:farmer-farms
 ```
+
+For that script, set `DATABASE_URL` to a disposable database named
+`smart_mandi_test_*`; successful runs insert one farm and one produce lot
+permanently in that disposable database.
 
 Before opening a PostgreSQL connection or making any mutating request, the
 test sends each supplied cookie to the application's `/api/auth/session`
@@ -110,3 +129,16 @@ npm run test:buyer-farmer-api
 This integration script verifies read/update/delete isolation, invalid and
 missing IDs, invalid dates and NUMERIC values, and unauthenticated access. It
 does not create, update, delete, or reset database records.
+
+The Auth.js session invalidation integration test verifies inactive-user,
+role-change, missing-buyer-profile, and logout behavior. It temporarily changes
+the configured buyer and restores its original user/profile fields in a
+`finally` block. Use only a disposable `smart_mandi_test_*` database with an
+active buyer fixture that has no dependent records preventing profile removal:
+
+```powershell
+$env:DATABASE_URL = "postgresql://<user>:<password>@localhost:5432/smart_mandi_test_auth"
+$env:TEST_SESSION_BUYER_COOKIE = "authjs.session-token=<active buyer session>"
+$env:TEST_SESSION_BUYER_USER_ID = "<buyer users.user_id with no dependent records>"
+npm run test:auth-session
+```

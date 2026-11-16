@@ -108,17 +108,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.user_id = user.user_id;
         token.role = user.role;
       }
-      return token;
-    },
 
-    async session({ session, token }) {
       const userId = token.user_id;
-
-      if (typeof userId !== "string" || !userId) {
-        throw new Error("Invalid authentication session");
+      if (typeof userId !== "string" || !/^[1-9]\d{0,18}$/.test(userId) ||
+        (userId.length === 19 && userId > "9223372036854775807") ||
+        (token.role !== "FARMER" && token.role !== "BUYER" && token.role !== "ADMIN")) {
+        return null;
       }
 
-      const databaseStartedAt = performance.now();
       const result = await query<{
         user_id: string;
         full_name: string;
@@ -142,10 +139,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
          LIMIT 1`,
         [userId],
       );
-      logAuthTiming("session database lookup", databaseStartedAt);
-
       const currentUser = result.rows[0];
-
       if (
         !currentUser ||
         currentUser.user_status !== "ACTIVE" ||
@@ -153,15 +147,32 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         (currentUser.role === "BUYER" &&
           (!currentUser.buyer_id || currentUser.buyer_status !== "ACTIVE"))
       ) {
-        throw new Error("User is inactive or no longer authorized");
+        return null;
       }
 
-      session.user.user_id = currentUser.user_id;
-      session.user.buyer_id =
+      token.user_id = currentUser.user_id;
+      token.role = currentUser.role;
+      token.buyer_id =
         currentUser.role === "BUYER" ? currentUser.buyer_id : null;
-      session.user.role = currentUser.role;
-      session.user.name = currentUser.full_name;
-      session.user.email = currentUser.email;
+      token.name = currentUser.full_name;
+      token.email = currentUser.email;
+      return token;
+    },
+
+    async session({ session, token }) {
+      if (
+        typeof token.user_id !== "string" ||
+        (token.role !== "FARMER" && token.role !== "BUYER" && token.role !== "ADMIN")
+      ) {
+        throw new Error("Invalid authentication session");
+      }
+
+      session.user.user_id = token.user_id;
+      session.user.buyer_id =
+        typeof token.buyer_id === "string" ? token.buyer_id : null;
+      session.user.role = token.role;
+      session.user.name = typeof token.name === "string" ? token.name : null;
+      if (typeof token.email === "string") session.user.email = token.email;
 
       return session;
     },

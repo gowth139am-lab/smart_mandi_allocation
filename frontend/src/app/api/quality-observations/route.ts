@@ -5,7 +5,10 @@ import { getFarmerIdForUser } from "@/lib/auth/farmer";
 import {
   getFarmerQualityLotIds,
   getQualityLotReference,
+  toQualityMongoId,
 } from "@/lib/db/quality-observations";
+import { parsePositiveBigintId } from "@/lib/validators/database";
+import { Long } from "mongodb";
 
 const COLLECTION = "quality_observations";
 const VALID_GRADES = new Set(["A", "B", "C"]);
@@ -15,18 +18,6 @@ const ISO_DATETIME_PATTERN =
 
 function errorResponse(message: string, status: number) {
   return NextResponse.json({ success: false, message }, { status });
-}
-
-function parsePositiveSafeInteger(value: unknown): number | null {
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value > 0 ? value : null;
-  }
-  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) {
-    return null;
-  }
-
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 function isValidCalendarDate(year: number, month: number, day: number): boolean {
@@ -70,6 +61,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function serializeObservation<T extends Record<string, unknown>>(observation: T) {
+  return Object.fromEntries(
+    Object.entries(observation).map(([key, value]) => [
+      key,
+      ["lot_id", "crop_id", "inspector_id"].includes(key) && value != null
+        ? String(value)
+        : key === "_id" && value && typeof value === "object" && "toString" in value
+          ? value.toString()
+          : value,
+    ]),
+  );
+}
+
 async function getReadAccess() {
   const session = await auth();
   if (!session?.user) return { error: errorResponse("Unauthorized", 401) } as const;
@@ -94,8 +98,8 @@ export async function GET(request: Request) {
     const filter: Record<string, unknown> = {};
 
     if (lotIdParam !== null) {
-      const lotId = parsePositiveSafeInteger(lotIdParam);
-      if (lotId === null) {
+      const lotId = parsePositiveBigintId(lotIdParam);
+      if (!lotId) {
         return errorResponse("lot_id must be a positive integer", 400);
       }
 
@@ -106,7 +110,7 @@ export async function GET(request: Request) {
           return errorResponse("You do not own this produce lot", 403);
         }
       }
-      filter.lot_id = lotId;
+      filter.lot_id = toQualityMongoId(lotId);
     } else if (access.role === "FARMER") {
       filter.lot_id = { $in: await getFarmerQualityLotIds(access.farmerId) };
     }
@@ -118,7 +122,9 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       count: observations.length,
-      observations: observations.map(({ _id, ...rest }) => ({ ...rest, _id: _id.toString() })),
+      observations: observations.map((observation) =>
+        serializeObservation(observation as unknown as Record<string, unknown>),
+      ),
     });
   } catch (error) {
     console.error("Fetching observations failed:", error);
@@ -147,14 +153,14 @@ export async function POST(request: Request) {
       return errorResponse("Invalid observation data", 400);
     }
 
-    const lotId = parsePositiveSafeInteger(body.lot_id);
-    const cropId = parsePositiveSafeInteger(body.crop_id);
+    const lotId = parsePositiveBigintId(body.lot_id);
+    const cropId = parsePositiveBigintId(body.crop_id);
     const assessedGrade = body.assessed_grade;
     const date = parseInspectionDate(body.inspection_date);
 
     if (
-      lotId === null ||
-      cropId === null ||
+      !lotId ||
+      !cropId ||
       typeof assessedGrade !== "string" ||
       !VALID_GRADES.has(assessedGrade) ||
       !isMeasurementRecord(body.measurements)
@@ -179,22 +185,22 @@ export async function POST(request: Request) {
       }
     }
 
-    if (Number(reference.crop_id) !== cropId) {
+    if (reference.crop_id !== cropId) {
       return errorResponse("crop_id does not match the produce lot", 400);
     }
 
-    const inspectorId = parsePositiveSafeInteger(session.user.user_id);
-    if (inspectorId === null) {
+    const inspectorId = parsePositiveBigintId(session.user.user_id);
+    if (!inspectorId) {
       return errorResponse("Invalid authenticated inspector", 500);
     }
 
     const observation = {
-      lot_id: lotId,
-      crop_id: cropId,
+      lot_id: Long.fromString(lotId),
+      crop_id: Long.fromString(cropId),
       crop_name: reference.crop_name,
       inspection_date: date,
       inspector: session.user.name || session.user.email || "Authenticated user",
-      inspector_id: inspectorId,
+      inspector_id: Long.fromString(inspectorId),
       measurements: body.measurements,
       assessed_grade: assessedGrade,
     };
@@ -206,7 +212,7 @@ export async function POST(request: Request) {
       success: true,
       message: "Quality observation saved",
       observationId: result.insertedId.toString(),
-      observation
+      observation: serializeObservation(observation as unknown as Record<string, unknown>),
     }, { status: 201 });
   } catch (error) {
     console.error("Saving observation failed:", error);

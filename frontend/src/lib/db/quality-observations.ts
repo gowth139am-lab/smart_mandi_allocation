@@ -1,4 +1,6 @@
 import { query } from "@/lib/db/postgres";
+import { Long } from "mongodb";
+import { parsePositiveBigintId } from "@/lib/validators/database";
 
 export type QualityLotReference = {
   lot_id: string;
@@ -8,7 +10,7 @@ export type QualityLotReference = {
 };
 
 export async function getQualityLotReference(
-  lotId: number,
+  lotId: string,
 ): Promise<QualityLotReference | null> {
   const result = await query<QualityLotReference>(
     `SELECT pl.lot_id::text AS lot_id,
@@ -26,9 +28,7 @@ export async function getQualityLotReference(
   return result.rows[0] ?? null;
 }
 
-export async function getFarmerQualityLotIds(
-  farmerId: string,
-): Promise<number[]> {
+export async function getFarmerQualityLotIds(farmerId: string): Promise<Long[]> {
   const result = await query<{ lot_id: string }>(
     `SELECT pl.lot_id::text AS lot_id
      FROM produce_lots pl
@@ -38,8 +38,11 @@ export async function getFarmerQualityLotIds(
   );
 
   return result.rows.flatMap(({ lot_id }) => {
-    if (!/^[1-9]\d*$/.test(lot_id)) return [];
-    const id = Number(lot_id);
-    return Number.isSafeInteger(id) ? [id] : [];
+    const id = parsePositiveBigintId(lot_id);
+    return id ? [Long.fromString(id)] : [];
   });
+}
+
+export function toQualityMongoId(id: string): Long {
+  return Long.fromString(id);
 }

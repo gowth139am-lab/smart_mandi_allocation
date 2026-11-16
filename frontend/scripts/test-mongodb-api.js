@@ -1,6 +1,8 @@
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 let assert;
 let MongoClient;
+let Long;
+let Double;
 let Client;
 const requiredEnvironment = [
   "DATABASE_URL",
@@ -12,6 +14,7 @@ const requiredEnvironment = [
   "TEST_ADMIN_COOKIE",
   "TEST_FARMER_USER_ID",
   "TEST_OTHER_FARMER_USER_ID",
+  "TEST_BUYER_USER_ID",
   "TEST_ADMIN_USER_ID",
   "TEST_OWN_LOT_ID",
   "TEST_OWN_CROP_ID",
@@ -25,30 +28,37 @@ function requireEnvironment() {
   if (missing.length > 0) {
     throw new Error(`Missing test configuration: ${missing.join(", ")}`);
   }
+
+  const postgresDatabase = new URL(process.env.DATABASE_URL).pathname.slice(1);
+  if (!postgresDatabase.startsWith("smart_mandi_test_")) {
+    throw new Error("DATABASE_URL must target a disposable smart_mandi_test_* database");
+  }
+  if (!process.env.MONGODB_DB.startsWith("smart_mandi_test_")) {
+    throw new Error("MONGODB_DB must target a disposable smart_mandi_test_* database");
+  }
 }
 
-function positiveSafeInteger(name) {
+function positiveBigint(name) {
   const value = process.env[name];
   if (!/^[1-9]\d*$/.test(value || "")) {
     throw new Error(`${name} must be a positive integer`);
   }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`${name} must be a safe integer`);
+  if (
+    value.length > 19 ||
+    (value.length === 19 && value > "9223372036854775807")
+  ) {
+    throw new Error(`${name} must fit a positive PostgreSQL BIGINT`);
   }
-  return parsed;
+  return value;
 }
 
 function safeDatabaseIds(values, label) {
   return values.flatMap(({ id }) => {
-    if (!/^[1-9]\d*$/.test(id)) {
+    if (!/^[1-9]\d{0,18}$/.test(id) ||
+      (id.length === 19 && id > "9223372036854775807")) {
       throw new Error(`${label} contains an invalid PostgreSQL ID`);
     }
-    const numberId = Number(id);
-    if (!Number.isSafeInteger(numberId)) {
-      throw new Error(`${label} contains an ID outside the supported numeric range`);
-    }
-    return [numberId];
+    return [id];
   });
 }
 
@@ -89,6 +99,15 @@ function observationPayload(lotId, cropId, overrides = {}) {
     assessed_grade: "A",
     ...overrides,
   };
+}
+
+async function verifySessionFixture(cookie, expectedUserId, expectedRole) {
+  const result = await requestJson("/api/auth/session", { cookie });
+  assert.equal(result.response.status, 200, "Auth.js session endpoint must respond");
+  assert.equal(result.data?.user?.user_id, expectedUserId,
+    `Configured cookie must authenticate TEST user ${expectedUserId}`);
+  assert.equal(result.data?.user?.role, expectedRole,
+    `Configured cookie must authenticate a ${expectedRole}`);
 }
 
 async function verifyFixtures(postgres, fixtures) {
@@ -150,8 +169,10 @@ function reportPipeline(lotIds = null) {
   return [
     {
       $match: {
-        lot_id: lotIds === null ? { $type: "number" } : { $in: lotIds },
-        crop_id: { $type: "number" },
+        lot_id: lotIds === null
+          ? { $type: ["int", "long", "double"] }
+          : { $in: lotIds.map((id) => Long.fromString(String(id))) },
+        crop_id: { $type: ["int", "long", "double"] },
         assessed_grade: { $in: ["A", "B", "C"] },
         inspection_date: { $type: "date" },
       },
@@ -179,13 +200,18 @@ function reportPipeline(lotIds = null) {
         latestInspection: 1,
       },
     },
-    { $sort: { crop_id: 1, assessed_grade: 1 } },
+    { $sort: { crop_id: 1, assessed_grade: 1, crop_name: 1 } },
   ];
 }
 
 async function expectedReport(collection, lotIds = null) {
   const rows = await collection.aggregate(reportPipeline(lotIds)).toArray();
-  return JSON.parse(JSON.stringify(rows));
+  const serialized = JSON.parse(JSON.stringify(rows, (_key, value) =>
+    value && typeof value === "object" && value._bsontype === "Long"
+      ? value.toString()
+      : value,
+  ));
+  return serialized.map((entry) => ({ ...entry, crop_id: String(entry.crop_id) }));
 }
 
 async function verifyReport(name, cookie, collection, lotIds = null) {
@@ -205,25 +231,49 @@ async function main() {
   ]);
   assert = assertModule.strict;
   MongoClient = mongodb.MongoClient;
+  Long = mongodb.Long;
+  Double = mongodb.Double;
   Client = postgresModule.Client;
 
   const fixtures = {
-    farmerUserId: positiveSafeInteger("TEST_FARMER_USER_ID"),
-    otherFarmerUserId: positiveSafeInteger("TEST_OTHER_FARMER_USER_ID"),
-    adminUserId: positiveSafeInteger("TEST_ADMIN_USER_ID"),
-    ownLotId: positiveSafeInteger("TEST_OWN_LOT_ID"),
-    ownCropId: positiveSafeInteger("TEST_OWN_CROP_ID"),
-    otherLotId: positiveSafeInteger("TEST_OTHER_LOT_ID"),
-    otherCropId: positiveSafeInteger("TEST_OTHER_CROP_ID"),
-    mismatchCropId: positiveSafeInteger("TEST_MISMATCH_CROP_ID"),
+    farmerUserId: positiveBigint("TEST_FARMER_USER_ID"),
+    otherFarmerUserId: positiveBigint("TEST_OTHER_FARMER_USER_ID"),
+    buyerUserId: positiveBigint("TEST_BUYER_USER_ID"),
+    adminUserId: positiveBigint("TEST_ADMIN_USER_ID"),
+    ownLotId: positiveBigint("TEST_OWN_LOT_ID"),
+    ownCropId: positiveBigint("TEST_OWN_CROP_ID"),
+    otherLotId: positiveBigint("TEST_OTHER_LOT_ID"),
+    otherCropId: positiveBigint("TEST_OTHER_CROP_ID"),
+    mismatchCropId: positiveBigint("TEST_MISMATCH_CROP_ID"),
   };
   assert.notEqual(fixtures.farmerUserId, fixtures.otherFarmerUserId,
     "The configured farmer user IDs must differ");
+  await verifySessionFixture(
+    process.env.TEST_FARMER_COOKIE,
+    fixtures.farmerUserId,
+    "FARMER",
+  );
+  await verifySessionFixture(
+    process.env.TEST_OTHER_FARMER_COOKIE,
+    fixtures.otherFarmerUserId,
+    "FARMER",
+  );
+  await verifySessionFixture(
+    process.env.TEST_BUYER_COOKIE,
+    fixtures.buyerUserId,
+    "BUYER",
+  );
+  await verifySessionFixture(
+    process.env.TEST_ADMIN_COOKIE,
+    fixtures.adminUserId,
+    "ADMIN",
+  );
 
   const postgres = new Client({ connectionString: process.env.DATABASE_URL });
-  const mongo = new MongoClient(process.env.MONGODB_URI);
+  const mongo = new MongoClient(process.env.MONGODB_URI, { promoteLongs: false });
   let postgresConnected = false;
   let mongoConnected = false;
+  const compatibilityObservationIds = [];
   try {
     await postgres.connect();
     postgresConnected = true;
@@ -236,6 +286,76 @@ async function main() {
     await mongo.connect();
     mongoConnected = true;
     const collection = mongo.db(process.env.MONGODB_DB).collection("quality_observations");
+    const legacyLotId = Number(fixtures.ownLotId);
+    const legacyCropId = Number(fixtures.ownCropId);
+    const legacyInspectorId = Number(fixtures.farmerUserId);
+    assert.ok(
+      Number.isSafeInteger(legacyLotId) &&
+      Number.isSafeInteger(legacyCropId) &&
+      Number.isSafeInteger(legacyInspectorId),
+      "Legacy numeric compatibility fixture IDs must be JavaScript safe integers",
+    );
+    const legacyObservation = await collection.insertOne({
+      lot_id: legacyLotId,
+      crop_id: legacyCropId,
+      crop_name: "Legacy numeric compatibility fixture",
+      inspection_date: new Date(),
+      inspector: "Legacy numeric compatibility fixture",
+      inspector_id: legacyInspectorId,
+      measurements: { compatibility: 1 },
+      assessed_grade: "C",
+    });
+    compatibilityObservationIds.push(legacyObservation.insertedId);
+    const legacyDoubleObservation = await collection.insertOne({
+      lot_id: Double.fromString(String(legacyLotId)),
+      crop_id: Double.fromString(String(legacyCropId)),
+      crop_name: "Legacy double BSON compatibility fixture",
+      inspection_date: new Date(),
+      inspector: "Legacy double BSON compatibility fixture",
+      inspector_id: Double.fromString(String(legacyInspectorId)),
+      measurements: { compatibility: 1 },
+      assessed_grade: "C",
+    });
+    compatibilityObservationIds.push(legacyDoubleObservation.insertedId);
+    const largeIdObservation = await collection.insertOne({
+      lot_id: Long.fromString("9007199254740993"),
+      crop_id: Long.fromString("9007199254740995"),
+      crop_name: "Large BIGINT compatibility fixture",
+      inspection_date: new Date(),
+      inspector: "Large BIGINT compatibility fixture",
+      inspector_id: Long.fromString("9007199254740997"),
+      measurements: { compatibility: 1 },
+      assessed_grade: "C",
+    });
+    compatibilityObservationIds.push(largeIdObservation.insertedId);
+    const legacyRead = await requestJson(
+      `/api/quality-observations?lot_id=${fixtures.ownLotId}`,
+      { cookie: process.env.TEST_FARMER_COOKIE },
+    );
+    await expectStatus("Legacy numeric BSON observation remains readable", legacyRead, 200);
+    assert.ok(legacyRead.data.observations?.some(
+      (item) => item._id === legacyObservation.insertedId.toString(),
+    ));
+    assert.equal(
+      typeof legacyRead.data.observations.find((item) => item._id === legacyObservation.insertedId.toString()).lot_id,
+      "string",
+    );
+    assert.ok(legacyRead.data.observations.some(
+      (item) => item._id === legacyDoubleObservation.insertedId.toString() &&
+        item.lot_id === fixtures.ownLotId,
+    ), "Legacy BSON double IDs must remain readable using exact decimal-string filters");
+    console.log("PASSED - Legacy numeric BSON IDs are readable and serialized as decimal strings");
+    const largeIdRead = await requestJson(
+      "/api/quality-observations?lot_id=9007199254740993",
+      { cookie: process.env.TEST_ADMIN_COOKIE },
+    );
+    await expectStatus("BSON Long IDs above Number.MAX_SAFE_INTEGER are readable", largeIdRead, 200);
+    const largeObservation = largeIdRead.data.observations?.find(
+      (item) => item._id === largeIdObservation.insertedId.toString(),
+    );
+    assert.equal(largeObservation?.lot_id, "9007199254740993");
+    assert.equal(largeObservation?.crop_id, "9007199254740995");
+    assert.equal(largeObservation?.inspector_id, "9007199254740997");
 
     console.log("1. Reject unauthenticated observation creation");
     await expectStatus(
@@ -262,6 +382,12 @@ async function main() {
       "The first farmer cookie must authenticate as TEST_FARMER_USER_ID");
     assert.notEqual(ownCreate.data.observation?.inspector, "Client Supplied Inspector");
     assert.equal(Object.hasOwn(ownCreate.data.observation || {}, "farmer_id"), false);
+    const storedObservation = await collection.findOne({
+      _id: new mongodb.ObjectId(ownCreate.data.observationId),
+    });
+    assert.ok(Long.isLong(storedObservation?.lot_id), "New lot_id values must use BSON Long");
+    assert.ok(Long.isLong(storedObservation?.crop_id), "New crop_id values must use BSON Long");
+    assert.ok(Long.isLong(storedObservation?.inspector_id), "New inspector_id values must use BSON Long");
 
     await expectStatus(
       "Farmer cannot create observation for another farmer's lot",
@@ -349,24 +475,44 @@ async function main() {
       collection,
       otherFarmerLotIds,
     );
-    await verifyReport(
+    const farmerReport = await verifyReport(
+      "Farmer report includes legacy numeric BSON observations",
+      process.env.TEST_FARMER_COOKIE,
+      collection,
+      ownFarmerLotIds,
+    );
+    assert.ok(farmerReport.some((entry) =>
+      entry.crop_name === "Legacy numeric compatibility fixture",
+    ), "Farmer report must aggregate the legacy numeric compatibility observation");
+    assert.ok(farmerReport.some((entry) =>
+      entry.crop_name === "Legacy double BSON compatibility fixture",
+    ), "Farmer report must aggregate legacy BSON double IDs");
+    const adminReport = await verifyReport(
       "Admin can read all quality observations, including both test farmers",
       process.env.TEST_ADMIN_COOKIE,
       collection,
     );
+    assert.ok(adminReport.some((entry) =>
+      entry.crop_name === "Large BIGINT compatibility fixture",
+    ), "Admin report must aggregate observations whose IDs exceed Number.MAX_SAFE_INTEGER");
+    assert.ok(adminReport.some((entry) => entry.crop_id === "9007199254740995"),
+      "Admin report must preserve BSON Long crop IDs above Number.MAX_SAFE_INTEGER");
 
     const fixtureObservations = await collection.find({
-      lot_id: { $in: [fixtures.ownLotId, fixtures.otherLotId] },
-      inspector_id: { $in: [fixtures.farmerUserId, fixtures.otherFarmerUserId, fixtures.adminUserId] },
+      lot_id: { $in: [fixtures.ownLotId, fixtures.otherLotId].map((id) => Long.fromString(id)) },
+      inspector_id: {
+        $in: [fixtures.farmerUserId, fixtures.otherFarmerUserId, fixtures.adminUserId]
+          .map((id) => Long.fromString(id)),
+      },
     }).toArray();
     assert.ok(fixtureObservations.some((item) =>
-      item.lot_id === fixtures.ownLotId && item.inspector_id === fixtures.farmerUserId,
+      String(item.lot_id) === fixtures.ownLotId && String(item.inspector_id) === fixtures.farmerUserId,
     ), "The first farmer observation must be present in MongoDB");
     assert.ok(fixtureObservations.some((item) =>
-      item.lot_id === fixtures.otherLotId && item.inspector_id === fixtures.otherFarmerUserId,
+      String(item.lot_id) === fixtures.otherLotId && String(item.inspector_id) === fixtures.otherFarmerUserId,
     ), "The second farmer observation must be present in MongoDB");
     assert.ok(fixtureObservations.some((item) =>
-      item.lot_id === fixtures.otherLotId && item.inspector_id === fixtures.adminUserId,
+      String(item.lot_id) === fixtures.otherLotId && String(item.inspector_id) === fixtures.adminUserId,
     ), "The admin override observation must be present in MongoDB");
     console.log("PASSED - Admin report includes the persisted observations for both farmers");
 
@@ -452,6 +598,11 @@ async function main() {
 
     console.log("Integration checks completed; three observations were inserted and remain in MongoDB.");
   } finally {
+    if (compatibilityObservationIds.length && mongoConnected) {
+      await mongo.db(process.env.MONGODB_DB)
+        .collection("quality_observations")
+        .deleteMany({ _id: { $in: compatibilityObservationIds } });
+    }
     if (postgresConnected) await postgres.end();
     if (mongoConnected) await mongo.close();
   }

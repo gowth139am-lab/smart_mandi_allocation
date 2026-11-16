@@ -20,6 +20,10 @@ let Client;
 function requireEnvironment() {
   const missing = requiredEnvironment.filter((name) => !process.env[name]);
   if (missing.length) throw new Error(`Missing test configuration: ${missing.join(", ")}`);
+  const database = new URL(process.env.DATABASE_URL).pathname.slice(1);
+  if (!database.startsWith("smart_mandi_test_")) {
+    throw new Error("DATABASE_URL must target a disposable smart_mandi_test_* database");
+  }
 }
 
 function positiveId(name) {
