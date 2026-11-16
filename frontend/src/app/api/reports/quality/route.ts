@@ -1,6 +1,8 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { getMongoDatabase } from "@/lib/db/mongodb";
+import { getFarmerIdForUser } from "@/lib/auth/farmer";
+import { getFarmerQualityLotIds } from "@/lib/db/quality-observations";
 
 export async function GET() {
   try {
@@ -8,15 +10,26 @@ export async function GET() {
     if (!session?.user) {
       return NextResponse.json({ success: false, message: "Unauthorized" }, { status: 401 });
     }
-    if (!["ADMIN", "FARMER", "BUYER"].includes(session.user.role)) {
+    if (session.user.role !== "ADMIN" && session.user.role !== "FARMER") {
       return NextResponse.json({ success: false, message: "Access denied" }, { status: 403 });
+    }
+
+    let lotIds: Awaited<ReturnType<typeof getFarmerQualityLotIds>> | null = null;
+    if (session.user.role === "FARMER") {
+      const farmerId = await getFarmerIdForUser(session.user.user_id);
+      if (!farmerId) {
+        return NextResponse.json({ success: false, message: "Farmer profile not found" }, { status: 403 });
+      }
+      lotIds = await getFarmerQualityLotIds(farmerId);
     }
 
     const database = await getMongoDatabase();
     const report = await database.collection("quality_observations").aggregate([
       { $match: {
-        lot_id: { $type: "number" },
-        crop_id: { $type: "number" },
+        lot_id: lotIds === null
+          ? { $type: ["int", "long", "double"] }
+          : { $in: lotIds },
+        crop_id: { $type: ["int", "long", "double"] },
         assessed_grade: { $in: ["A", "B", "C"] },
         inspection_date: { $type: "date" }
       }},
@@ -35,10 +48,18 @@ export async function GET() {
         distinctLotCount: { $size: "$uniqueLots" },
         latestInspection: 1
       }},
-      { $sort: { crop_id: 1, assessed_grade: 1 }}
+      { $sort: { crop_id: 1, assessed_grade: 1, crop_name: 1 }}
     ]).toArray();
 
-    return NextResponse.json({ success: true, totalGroups: report.length, report });
+    const serializedReport = report.map((entry) => ({
+      ...entry,
+      crop_id: String(entry.crop_id),
+    }));
+    return NextResponse.json({
+      success: true,
+      totalGroups: serializedReport.length,
+      report: serializedReport,
+    });
   } catch (error) {
     console.error("Quality report failed:", error);
     return NextResponse.json({ success: false, message: "Could not generate quality report" }, { status: 500 });

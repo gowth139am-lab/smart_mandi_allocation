@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { query } from "@/lib/db/postgres";
+import { parseDateOnly, parsePostgresNumeric } from "@/lib/validators/database";
 
 export async function GET() {
   try {
@@ -46,39 +47,42 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "Buyer access required" }, { status: 403 });
     }
 
-    let body: Record<string, unknown>;
+    let body: unknown;
     try {
       body = await request.json();
     } catch {
       return NextResponse.json({ message: "Request body must be valid JSON" }, { status: 400 });
     }
-    const cropName = typeof body.cropName === "string" ? body.cropName.trim() : "";
-    const quantity = Number(body.requiredQuantity);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ message: "Request body must be a JSON object" }, { status: 400 });
+    }
+    const data = body as Record<string, unknown>;
+    const cropName = typeof data.cropName === "string" ? data.cropName.trim() : "";
+    const quantity = parsePostgresNumeric(data.requiredQuantity, 12, 3, true);
+    const hasMaximumPrice =
+      data.maximumPrice !== "" && data.maximumPrice !== null && data.maximumPrice !== undefined;
     const maximumPrice =
-      body.maximumPrice === "" || body.maximumPrice === null || body.maximumPrice === undefined
-        ? null
-        : Number(body.maximumPrice);
-    const grade = body.minimumGrade ? String(body.minimumGrade).trim() : null;
-    const location = typeof body.location === "string" ? body.location.trim() : "";
-    const requiredDate = body.requiredDate || null;
+      hasMaximumPrice
+        ? parsePostgresNumeric(data.maximumPrice, 12, 2, false)
+        : null;
+    const grade = data.minimumGrade ? String(data.minimumGrade).trim() : null;
+    const location = typeof data.location === "string" ? data.location.trim() : "";
+    const hasRequiredDate =
+      data.requiredDate !== "" && data.requiredDate !== null && data.requiredDate !== undefined;
+    const requiredDate = hasRequiredDate ? parseDateOnly(data.requiredDate) : null;
 
     if (!cropName || cropName.length > 100 ||
-        !Number.isFinite(quantity) || quantity <= 0 ||
-        (maximumPrice !== null && (!Number.isFinite(maximumPrice) || maximumPrice < 0)) ||
+        quantity === null ||
+        (hasMaximumPrice && maximumPrice === null) ||
         (grade !== null && grade.length > 20) ||
         !location || location.length > 200 ||
-        (grade !== null && !["A", "B", "C"].includes(grade))) {
+        (grade !== null && !["A", "B", "C"].includes(grade)) ||
+        (hasRequiredDate && requiredDate === null)) {
       return NextResponse.json({ message: "Please enter valid demand details" }, { status: 400 });
     }
 
-    if (requiredDate && (typeof requiredDate !== "string" ||
-        !/^\d{4}-\d{2}-\d{2}$/.test(requiredDate) ||
-        Number.isNaN(Date.parse(`${requiredDate}T00:00:00Z`)))) {
-      return NextResponse.json({ message: "Invalid required date" }, { status: 400 });
-    }
-
     const crop = await query(
-      "SELECT crop_id FROM crops WHERE LOWER(crop_name) = LOWER($1)",
+      "SELECT crop_id::text AS crop_id FROM crops WHERE LOWER(crop_name) = LOWER($1)",
       [cropName]
     );
 

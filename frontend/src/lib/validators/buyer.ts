@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  parseDateOnly,
+  parsePostgresNumeric,
+  parsePositiveBigintId,
+} from "@/lib/validators/database";
 
 export const buyerProfileSchema = z.object({
   fullName: z.string().trim().min(2, "Name must contain at least 2 characters").max(100),
@@ -10,12 +15,17 @@ export const buyerProfileSchema = z.object({
 });
 
 export const buyerDemandSchema = z.object({
-  cropId: z.string().trim().min(1, "Crop is required"),
+  cropId: z.string().trim().refine((value) => parsePositiveBigintId(value) !== null, "Crop is required"),
   cropName: z.string().trim().min(2).max(100),
-  requiredQuantityKg: z.number().positive("Quantity must be greater than zero"),
+  requiredQuantityKg: z.union([z.number(), z.string()])
+    .transform((value) => parsePostgresNumeric(value, 12, 3, true))
+    .refine((value) => value !== null, "Quantity must be positive with up to 3 decimal places and fit NUMERIC(12,3)"),
   minimumGrade: z.enum(["A", "B", "C"]),
-  maxPricePerKg: z.number().positive("Maximum price must be greater than zero"),
-  requiredBy: z.iso.datetime().optional(),
+  maxPricePerKg: z.union([z.number(), z.string()]).nullable().optional()
+    .refine((value) => value == null || parsePostgresNumeric(value, 12, 2, false) !== null,
+      "Maximum price must fit NUMERIC(12,2)"),
+  requiredBy: z.string().nullable().optional()
+    .refine((value) => value == null || parseDateOnly(value) !== null, "Enter a valid calendar date"),
   deliveryLocation: z.string().trim().min(3).max(200),
   notes: z.string().trim().max(500).optional(),
 });

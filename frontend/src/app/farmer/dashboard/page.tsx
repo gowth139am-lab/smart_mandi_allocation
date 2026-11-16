@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
 type Lot = {
   id: string;
@@ -21,6 +21,39 @@ type Lot = {
 
 type Option = { id: string; farm_name?: string; crop_name?: string; unit?: string };
 
+type DashboardData = {
+  lots: Lot[];
+  farms: Option[];
+  crops: Option[];
+};
+
+async function fetchDashboardData(signal: AbortSignal): Promise<DashboardData> {
+  const [lotsResponse, farmsResponse] = await Promise.all([
+    fetch("/api/farmer/lots", { signal }),
+    fetch("/api/farmer/farms", { signal }),
+  ]);
+  const [lotsData, farmsData] = await Promise.all([
+    lotsResponse.json(),
+    farmsResponse.json(),
+  ]);
+  if (!lotsResponse.ok) throw new Error(lotsData.message || "Could not load produce lots");
+  if (!farmsResponse.ok) throw new Error(farmsData.message || "Could not load farms");
+
+  return {
+    lots: lotsData.lots || [],
+    farms: farmsData.farms || [],
+    crops: lotsData.crops || [],
+  };
+}
+
+const emptyFarmForm = {
+  farmName: "",
+  location: "",
+  areaAcres: "",
+  soilType: "",
+  irrigationType: "",
+};
+
 const emptyForm = {
   farmId: "",
   cropId: "",
@@ -34,36 +67,128 @@ export default function FarmerDashboard() {
   const [lots, setLots] = useState<Lot[]>([]);
   const [farms, setFarms] = useState<Option[]>([]);
   const [crops, setCrops] = useState<Option[]>([]);
+  const [farmForm, setFarmForm] = useState(emptyFarmForm);
+  const [showFarmForm, setShowFarmForm] = useState(false);
+  const [savingFarm, setSavingFarm] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ grade: "", expiryDate: "" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const mountedRef = useRef(false);
+  const loadControllerRef = useRef<AbortController | null>(null);
 
-  async function loadLots() {
-    setLoading(true);
+  const loadLots = useCallback(async () => {
+    const controller = new AbortController();
+    loadControllerRef.current?.abort();
+    loadControllerRef.current = controller;
     try {
-      const response = await fetch("/api/farmer/lots");
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || "Could not load produce lots");
-      setLots(data.lots || []);
-      setFarms(data.farms || []);
-      setCrops(data.crops || []);
+      const data = await fetchDashboardData(controller.signal);
+      if (!mountedRef.current || controller.signal.aborted) return;
+      setLots(data.lots);
+      setFarms(data.farms);
+      setCrops(data.crops);
+      setShowFarmForm(data.farms.length === 0);
+      setLoadError("");
+      setHasLoaded(true);
       setForm((current) => ({
         ...current,
-        farmId: current.farmId || data.farms?.[0]?.id || "",
+        farmId: data.farms.some((farm) => farm.id === current.farmId)
+          ? current.farmId
+          : data.farms[0]?.id || "",
       }));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not load produce lots");
+      if (controller.signal.aborted || !mountedRef.current) return;
+      setLoadError(reason instanceof Error ? reason.message : "Could not load dashboard data");
     } finally {
-      setLoading(false);
+      if (mountedRef.current && loadControllerRef.current === controller) {
+        setLoading(false);
+      }
     }
-  }
+  }, []);
 
   useEffect(() => {
-    void loadLots();
+    const controller = new AbortController();
+    let active = true;
+    mountedRef.current = true;
+    loadControllerRef.current = controller;
+
+    async function loadInitialDashboard() {
+      try {
+        const data = await fetchDashboardData(controller.signal);
+        if (!active || controller.signal.aborted) return;
+        setLots(data.lots);
+        setFarms(data.farms);
+        setCrops(data.crops);
+        setShowFarmForm(data.farms.length === 0);
+        setLoadError("");
+        setHasLoaded(true);
+        setForm((current) => ({
+          ...current,
+          farmId: data.farms.some((farm) => farm.id === current.farmId)
+            ? current.farmId
+            : data.farms[0]?.id || "",
+        }));
+      } catch (reason) {
+        if (!active || controller.signal.aborted) return;
+        setLoadError(reason instanceof Error ? reason.message : "Could not load dashboard data");
+      } finally {
+        if (active && !controller.signal.aborted) setLoading(false);
+      }
+    }
+
+    void loadInitialDashboard();
+    return () => {
+      active = false;
+      mountedRef.current = false;
+      loadControllerRef.current?.abort();
+      loadControllerRef.current = null;
+    };
   }, []);
+
+  function retryDashboardLoad() {
+    setLoading(true);
+    setLoadError("");
+    void loadLots();
+  }
+
+  async function createFarm(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    setSavingFarm(true);
+
+    const formData = new FormData(event.currentTarget);
+    try {
+      const response = await fetch("/api/farmer/farms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          farmName: formData.get("farmName"),
+          location: formData.get("location"),
+          areaAcres: formData.get("areaAcres"),
+          soilType: formData.get("soilType"),
+          irrigationType: formData.get("irrigationType"),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Could not create farm");
+
+      setFarmForm(emptyFarmForm);
+      setForm((current) => ({ ...current, farmId: data.farm.id }));
+      setMessage(data.message);
+      setShowFarmForm(false);
+      setLoading(true);
+      await loadLots();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not create farm");
+    } finally {
+      setSavingFarm(false);
+    }
+  }
 
   async function createLot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -81,6 +206,7 @@ export default function FarmerDashboard() {
     }
     setMessage(data.message);
     setForm({ ...emptyForm, farmId: form.farmId });
+    setLoading(true);
     await loadLots();
   }
 
@@ -99,6 +225,7 @@ export default function FarmerDashboard() {
     }
     setMessage(data.message);
     setEditingId(null);
+    setLoading(true);
     await loadLots();
   }
 
@@ -113,6 +240,7 @@ export default function FarmerDashboard() {
       return;
     }
     setMessage(data.message);
+    setLoading(true);
     await loadLots();
   }
 
@@ -129,7 +257,111 @@ export default function FarmerDashboard() {
         </div>
 
         <section className="mt-7 rounded-xl border bg-white p-6 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold">
+                {!hasLoaded
+                  ? "Farm data"
+                  : farms.length === 0 ? "Set up your farm" : "Farm management"}
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                {!hasLoaded
+                  ? "Farm setup will be available after your farm data loads."
+                  : farms.length === 0
+                  ? "Create a farm before adding produce lots."
+                  : `${farms.length} farm${farms.length === 1 ? "" : "s"} available for your produce lots.`}
+              </p>
+            </div>
+            {farms.length > 0 && !showFarmForm && (
+              <button
+                type="button"
+                onClick={() => setShowFarmForm(true)}
+                className="rounded-lg border border-green-700 px-4 py-2 text-sm font-semibold text-green-700"
+              >
+                + Add farm
+              </button>
+            )}
+          </div>
+          {hasLoaded && showFarmForm && (
+            <form onSubmit={createFarm} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="text-sm font-medium">Farm name
+                <input
+                  name="farmName"
+                  required
+                  maxLength={100}
+                  value={farmForm.farmName}
+                  onChange={(event) => setFarmForm({ ...farmForm, farmName: event.target.value })}
+                  className={inputClass}
+                />
+              </label>
+              <label className="text-sm font-medium">Location
+                <input
+                  name="location"
+                  maxLength={200}
+                  value={farmForm.location}
+                  onChange={(event) => setFarmForm({ ...farmForm, location: event.target.value })}
+                  className={inputClass}
+                />
+              </label>
+              <label className="text-sm font-medium">Area (acres)
+                <input
+                  name="areaAcres"
+                  type="number"
+                  min="0.01"
+                  max="99999999.99"
+                  step="0.01"
+                  value={farmForm.areaAcres}
+                  onChange={(event) => setFarmForm({ ...farmForm, areaAcres: event.target.value })}
+                  className={inputClass}
+                />
+              </label>
+              <label className="text-sm font-medium">Soil type
+                <input
+                  name="soilType"
+                  maxLength={100}
+                  value={farmForm.soilType}
+                  onChange={(event) => setFarmForm({ ...farmForm, soilType: event.target.value })}
+                  className={inputClass}
+                />
+              </label>
+              <label className="text-sm font-medium">Irrigation type
+                <input
+                  name="irrigationType"
+                  maxLength={100}
+                  value={farmForm.irrigationType}
+                  onChange={(event) => setFarmForm({ ...farmForm, irrigationType: event.target.value })}
+                  className={inputClass}
+                />
+              </label>
+              <div className="flex items-end gap-3">
+                <button
+                  type="submit"
+                  disabled={savingFarm}
+                  className="rounded-lg bg-green-700 px-5 py-2 text-sm font-semibold text-white hover:bg-green-800 disabled:opacity-50"
+                >
+                  {savingFarm ? "Saving farm..." : "Create farm"}
+                </button>
+                {farms.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowFarmForm(false)}
+                    className="rounded-lg border px-4 py-2 text-sm font-semibold"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </form>
+          )}
+        </section>
+
+        <section className="mt-7 rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="text-xl font-bold">Add produce lot</h2>
+          {!hasLoaded ? (
+            <p className="mt-3 text-sm text-slate-600">Farm selection is unavailable until dashboard data loads.</p>
+          ) : farms.length === 0 ? (
+            <p className="mt-3 text-sm text-slate-600">Create your farm above to enable produce-lot entry.</p>
+          ) : (
           <form onSubmit={createLot} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <label className="text-sm font-medium">Farm
               <select required value={form.farmId} onChange={(e) => setForm({ ...form, farmId: e.target.value })} className={inputClass}>
@@ -159,16 +391,30 @@ export default function FarmerDashboard() {
             </label>
             <button type="submit" className="rounded-lg bg-green-700 px-5 py-2 text-sm font-semibold text-white hover:bg-green-800 sm:w-fit">Create lot</button>
           </form>
+          )}
         </section>
 
         {message && <p className="mt-5 rounded-lg bg-green-100 p-3 text-sm text-green-800">{message}</p>}
         {error && <p className="mt-5 rounded-lg bg-red-100 p-3 text-sm text-red-800">{error}</p>}
+        {loadError && (
+          <div role="alert" className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-red-100 p-3 text-sm text-red-800">
+            <span>Could not load farm and produce-lot data: {loadError}</span>
+            <button
+              type="button"
+              onClick={retryDashboardLoad}
+              disabled={loading}
+              className="rounded border border-red-700 px-3 py-1 font-semibold disabled:opacity-50"
+            >
+              {loading ? "Retrying..." : "Retry"}
+            </button>
+          </div>
+        )}
 
         <section className="mt-7 rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="text-xl font-bold">My produce lots</h2>
           {loading && <p className="py-8 text-slate-500">Loading inventory...</p>}
-          {!loading && lots.length === 0 && <p className="py-8 text-slate-500">No produce lots found.</p>}
-          {!loading && lots.length > 0 && (
+          {!loading && hasLoaded && lots.length === 0 && <p className="py-8 text-slate-500">No produce lots found.</p>}
+          {!loading && hasLoaded && lots.length > 0 && (
             <div className="mt-5 overflow-x-auto">
               <table className="w-full min-w-[950px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">

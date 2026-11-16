@@ -17,9 +17,9 @@ export default function NewBuyerDemandPage() {
     const form = new FormData(event.currentTarget);
     const payload = {
       cropName: String(form.get("cropName") || ""),
-      requiredQuantity: Number(form.get("requiredQuantity")),
+      requiredQuantity: String(form.get("requiredQuantity") || ""),
       minimumGrade: String(form.get("minimumGrade") || ""),
-      maximumPrice: form.get("maximumPrice") ? Number(form.get("maximumPrice")) : null,
+      maximumPrice: String(form.get("maximumPrice") || "") || null,
       requiredDate: String(form.get("requiredDate") || "") || null,
       location: String(form.get("location") || "")
     };
