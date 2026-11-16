@@ -21,8 +21,8 @@ function requireTestConfiguration() {
 
   const databaseUrl = new URL(process.env.DATABASE_URL);
   const database = decodeURIComponent(databaseUrl.pathname.slice(1));
-  if (!database.startsWith("smart_mandi_test_") || database === "smart_mandi_db") {
-    throw new Error("DATABASE_URL must target a disposable smart_mandi_test_* database");
+  if (database !== "smart_mandi_test_auth") {
+    throw new Error("DATABASE_URL must target the isolated smart_mandi_test_auth database");
   }
 
   const baseUrl = new URL(BASE_URL);

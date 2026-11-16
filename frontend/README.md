@@ -137,7 +137,7 @@ active buyer profile, and tests inactive-user, role-change,
 missing-buyer-profile, and logout behavior. It temporarily changes only that
 fixture and restores its original role, status, and buyer profile in `finally`
 cleanup. The buyer fixture must have no dependent records preventing temporary
-profile removal. Use only a disposable `smart_mandi_test_*` database:
+profile removal. Use only the isolated `smart_mandi_test_auth` database:
 
 ```powershell
 $env:BASE_URL = "http://localhost:3000"
@@ -149,11 +149,11 @@ npm run test:auth-session
 Remove-Item Env:\TEST_SESSION_BUYER_PASSWORD
 ```
 
-`BASE_URL` defaults to `http://localhost:3000`. The test refuses any database
-whose name does not start with `smart_mandi_test_`, and refuses usernames other
-than the dedicated fixture. The password is entered as a hidden PowerShell
-prompt and kept only in the current process environment; do not put it in a
-script, `.env` file committed to Git, or command-line argument.
+`BASE_URL` defaults to `http://localhost:3000`. The test refuses databases
+other than `smart_mandi_test_auth`, and refuses usernames other than the
+dedicated fixture. The password is entered as a hidden PowerShell prompt and
+kept only in the current process environment; do not put it in a script,
+`.env` file committed to Git, or command-line argument.
 
 The test checks the session endpoint response and independently inspects all
 `Set-Cookie` headers for the configured Auth.js session-cookie name. For account
