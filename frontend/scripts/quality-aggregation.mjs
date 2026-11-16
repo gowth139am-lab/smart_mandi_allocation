@@ -21,22 +21,24 @@ async function main() {
       {
         $group: {
           _id: {
-            cropId: "$cropId",
-            overallGrade: "$overallGrade"
+            crop_id: "$crop_id",
+            crop_name: "$crop_name",
+            assessed_grade: "$assessed_grade"
           },
           observationCount: { $sum: 1 },
-          latestObservation: { $max: "$observedAt" },
-          uniqueLots: { $addToSet: "$lotId" }
+          latestInspection: { $max: "$inspection_date" },
+          uniqueLots: { $addToSet: "$lot_id" }
         }
       },
       {
         $project: {
           _id: 0,
-          cropId: "$_id.cropId",
-          overallGrade: "$_id.overallGrade",
+          crop_id: "$_id.crop_id",
+          crop_name: "$_id.crop_name",
+          assessed_grade: "$_id.assessed_grade",
           observationCount: 1,
           distinctLotCount: { $size: "$uniqueLots" },
-          latestObservation: 1
+          latestInspection: 1
         }
       },
       {

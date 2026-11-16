@@ -9,33 +9,32 @@ buyers, crops, produce lots, inventory and sales.
 
 ## 2. Database
 
-Database name: smart_mandi_db
+Database name: smart_mandi_nosql
 
 Collection: quality_observations
 
 ## 3. Document structure
 
 {
-  "lotId": "TEST-LOT-001",
-  "cropId": "CROP-TOMATO",
-  "observedAt": "Date",
-  "inspectorId": "INSPECTOR-001",
-  "observationType": "QUALITY_CHECK",
-  "attributes": {
+  "lot_id": 1,
+  "crop_id": 1,
+  "inspection_date": "Date",
+  "inspector": "Inspector name",
+  "inspector_id": 1,
+  "measurements": {
     "firmness": "Good",
     "ripeness": "Ripe",
     "bruising": "Low",
     "colour": "Red"
   },
-  "overallGrade": "A",
-  "notes": "Development test observation"
+  "assessed_grade": "A",
 }
 
 ## 4. Indexes
 
-- lotId + observedAt
-- cropId + observedAt
-- inspectorId
+- lot_id + inspection_date
+- crop_id + inspection_date
+- assessed_grade
 
 ## 5. APIs
 
@@ -45,7 +44,7 @@ Checks MongoDB connectivity.
 GET /api/quality-observations
 Retrieves quality observations.
 
-GET /api/quality-observations?lotId=TEST-LOT-001
+GET /api/quality-observations?lot_id=1
 Retrieves observations for a specific lot.
 
 POST /api/quality-observations
@@ -66,7 +65,7 @@ Generates a crop quality aggregation report.
 
 ## 7. Testing
 
-The following development checks have passed:
+The following checks are available:
 
 - MongoDB connection health API
 - Collection creation
@@ -79,6 +78,6 @@ The following development checks have passed:
 
 ## 8. Integration note
 
-The lotId and cropId fields are logical references to
+The lot_id and crop_id fields are logical references to
 PostgreSQL records. Cross-database validation must be
-integrated with the PostgreSQL module before final release.
+performed by the API before an observation is stored.

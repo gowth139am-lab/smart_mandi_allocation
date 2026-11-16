@@ -5,6 +5,12 @@ import { query } from "@/lib/db/postgres";
 
 type AppRole = "FARMER" | "BUYER" | "ADMIN";
 
+function logAuthTiming(label: string, startedAt: number) {
+  if (process.env.NODE_ENV !== "production") {
+    console.info(`[auth timing] ${label}: ${(performance.now() - startedAt).toFixed(1)}ms`);
+  }
+}
+
 type DatabaseUser = {
   user_id: string;
   username: string;
@@ -41,6 +47,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         if (!identifier || !password || password.length > 128) return null;
 
+        const databaseStartedAt = performance.now();
         const result = await query<DatabaseUser>(
           `SELECT
              u.user_id::text AS user_id,
@@ -59,6 +66,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
            LIMIT 1`,
           [identifier],
         );
+        logAuthTiming("credentials database lookup", databaseStartedAt);
 
         const user = result.rows[0];
 
@@ -67,10 +75,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // Reject the placeholder values in the sample data.
         if (!/^\$2[aby]\$\d{2}\$/.test(user.password_hash)) return null;
 
+        const bcryptStartedAt = performance.now();
         const passwordMatches = await bcrypt.compare(
           password,
           user.password_hash,
         );
+        logAuthTiming("credentials bcrypt comparison", bcryptStartedAt);
 
         if (!passwordMatches) return null;
 
@@ -108,6 +118,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         throw new Error("Invalid authentication session");
       }
 
+      const databaseStartedAt = performance.now();
       const result = await query<{
         user_id: string;
         full_name: string;
@@ -131,6 +142,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
          LIMIT 1`,
         [userId],
       );
+      logAuthTiming("session database lookup", databaseStartedAt);
 
       const currentUser = result.rows[0];
 

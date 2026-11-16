@@ -46,7 +46,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "Buyer access required" }, { status: 403 });
     }
 
-    const body = await request.json();
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ message: "Request body must be valid JSON" }, { status: 400 });
+    }
     const cropName = typeof body.cropName === "string" ? body.cropName.trim() : "";
     const quantity = Number(body.requiredQuantity);
     const maximumPrice =
@@ -61,7 +66,8 @@ export async function POST(request: Request) {
         !Number.isFinite(quantity) || quantity <= 0 ||
         (maximumPrice !== null && (!Number.isFinite(maximumPrice) || maximumPrice < 0)) ||
         (grade !== null && grade.length > 20) ||
-        !location || location.length > 200) {
+        !location || location.length > 200 ||
+        (grade !== null && !["A", "B", "C"].includes(grade))) {
       return NextResponse.json({ message: "Please enter valid demand details" }, { status: 400 });
     }
 

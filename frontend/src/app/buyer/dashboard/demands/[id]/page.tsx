@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 type Demand = {
   id: string;
@@ -22,6 +22,9 @@ export default function DemandDetailsPage() {
   const [demand, setDemand] = useState<Demand | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetch(`/api/buyer/demands/${encodeURIComponent(params.id)}`)
@@ -33,6 +36,48 @@ export default function DemandDetailsPage() {
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, [params.id]);
+
+  async function updateDemand(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!demand) return;
+    setSaving(true);
+    setMessage("");
+    const form = new FormData(event.currentTarget);
+    const response = await fetch(`/api/buyer/demands/${encodeURIComponent(params.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        minimumGrade: form.get("minimumGrade"),
+        maximumPrice: form.get("maximumPrice"),
+        requiredDate: form.get("requiredDate"),
+        location: form.get("location"),
+      }),
+    });
+    const data = await response.json();
+    setSaving(false);
+    if (!response.ok) {
+      setMessage(data.message || "Could not update demand");
+      return;
+    }
+    setEditing(false);
+    setMessage("Demand updated successfully.");
+    const refreshed = await fetch(`/api/buyer/demands/${encodeURIComponent(params.id)}`);
+    const refreshedData = await refreshed.json();
+    if (refreshed.ok) setDemand(refreshedData.demand);
+  }
+
+  async function cancelDemand() {
+    if (!window.confirm("Cancel this demand?")) return;
+    setMessage("");
+    const response = await fetch(`/api/buyer/demands/${encodeURIComponent(params.id)}`, { method: "DELETE" });
+    const data = await response.json();
+    if (!response.ok) {
+      setMessage(data.message || "Could not cancel demand");
+      return;
+    }
+    setDemand((current) => current ? { ...current, status: "CANCELLED" } : current);
+    setMessage("Demand cancelled successfully.");
+  }
 
   const total = Number(demand?.quantity || 0);
   const remaining = Number(demand?.remaining_quantity || 0);
@@ -56,6 +101,34 @@ export default function DemandDetailsPage() {
                 <span className="font-semibold">Demand #{demand.id}</span>
                 <span className="rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-800">{demand.status}</span>
               </div>
+              {message && <p className="mt-4 rounded-lg bg-slate-100 p-3 text-sm text-slate-700">{message}</p>}
+              {editing ? (
+                <form onSubmit={updateDemand} className="mt-6 grid gap-4 rounded-lg bg-slate-50 p-4 sm:grid-cols-2">
+                  <label className="text-sm font-medium">Minimum grade
+                    <select name="minimumGrade" defaultValue={demand.grade || ""} className="mt-1 w-full rounded border bg-white p-2">
+                      <option value="">No minimum</option><option value="A">Grade A</option><option value="B">Grade B</option><option value="C">Grade C</option>
+                    </select>
+                  </label>
+                  <label className="text-sm font-medium">Maximum price
+                    <input name="maximumPrice" type="number" min="0" step="0.01" defaultValue={demand.max_price || ""} className="mt-1 w-full rounded border p-2" />
+                  </label>
+                  <label className="text-sm font-medium">Required date
+                    <input name="requiredDate" type="date" defaultValue={demand.required_date?.slice(0, 10) || ""} className="mt-1 w-full rounded border p-2" />
+                  </label>
+                  <label className="text-sm font-medium">Delivery location
+                    <input name="location" required maxLength={200} defaultValue={demand.location} className="mt-1 w-full rounded border p-2" />
+                  </label>
+                  <div className="flex gap-3 sm:col-span-2">
+                    <button disabled={saving} className="rounded bg-green-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{saving ? "Saving..." : "Save changes"}</button>
+                    <button type="button" onClick={() => setEditing(false)} className="rounded border px-4 py-2 text-sm font-semibold">Close</button>
+                  </div>
+                </form>
+              ) : (demand.status === "OPEN" || demand.status === "PARTIALLY_FULFILLED") && (
+                <div className="mt-6 flex gap-3">
+                  <button onClick={() => setEditing(true)} className="rounded border border-green-700 px-4 py-2 text-sm font-semibold text-green-700">Edit demand</button>
+                  <button onClick={cancelDemand} className="rounded border border-red-600 px-4 py-2 text-sm font-semibold text-red-600">Cancel demand</button>
+                </div>
+              )}
               <div className="mt-7 grid gap-5 sm:grid-cols-2">
                 <div><p className="text-sm text-slate-500">Crop</p><p className="mt-1 font-semibold">{demand.crop}</p></div>
                 <div><p className="text-sm text-slate-500">Delivery location</p><p className="mt-1 font-semibold">{demand.location}</p></div>

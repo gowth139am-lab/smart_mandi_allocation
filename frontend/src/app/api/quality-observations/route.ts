@@ -61,9 +61,11 @@ export async function POST(request: Request) {
     }
 
     const { lot_id, crop_id, measurements, assessed_grade, inspection_date } = body;
+    const lotId = typeof lot_id === "number" ? lot_id : Number(lot_id);
+    const cropId = typeof crop_id === "number" ? crop_id : Number(crop_id);
 
-    if (!Number.isSafeInteger(lot_id) || Number(lot_id) <= 0 ||
-        !Number.isSafeInteger(crop_id) || Number(crop_id) <= 0 ||
+    if (!Number.isSafeInteger(lotId) || lotId <= 0 ||
+        !Number.isSafeInteger(cropId) || cropId <= 0 ||
         !measurements || typeof measurements !== "object" || Array.isArray(measurements) ||
         typeof assessed_grade !== "string" || !VALID_GRADES.includes(assessed_grade)) {
       return NextResponse.json({ success: false, message: "Invalid observation data" }, { status: 400 });
@@ -79,7 +81,7 @@ export async function POST(request: Request) {
       `SELECT c.crop_name
        FROM produce_lots pl JOIN crops c ON c.crop_id = pl.crop_id
        WHERE pl.lot_id = $1 AND pl.crop_id = $2`,
-      [lot_id, crop_id]
+      [lotId, cropId]
     );
 
     if (reference.rowCount === 0) {
@@ -87,15 +89,18 @@ export async function POST(request: Request) {
     }
 
     const observation = {
-      lot_id,
-      crop_id,
+      lot_id: lotId,
+      crop_id: cropId,
       crop_name: reference.rows[0].crop_name,
       inspection_date: date,
       inspector: session.user.name || session.user.email || "Authenticated user",
-      inspector_id: session.user.user_id,
+      inspector_id: Number(session.user.user_id),
       measurements,
       assessed_grade
     };
+    if (!Number.isSafeInteger(observation.inspector_id) || observation.inspector_id <= 0) {
+      return NextResponse.json({ success: false, message: "Invalid authenticated inspector" }, { status: 500 });
+    }
 
     const database = await getMongoDatabase();
     const result = await database.collection(COLLECTION).insertOne(observation);

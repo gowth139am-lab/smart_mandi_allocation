@@ -7,7 +7,7 @@ export default auth((request) => {
   const role = user?.role;
 
   // Login must remain accessible when the user is signed out.
-  if (path === "/login") {
+  if (path === "/login" || path === "/register") {
     if (!user) return NextResponse.next();
 
     const target =

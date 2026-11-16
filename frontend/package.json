@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "setup:demo-users": "node scripts/create-demo-users.mjs",
+    "setup:mongodb": "node scripts/setup-mongodb.mjs",
+    "test:mongodb": "node scripts/test-mongodb-api.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
