@@ -251,6 +251,7 @@ export default function FarmerDashboard() {
       <div className="mx-auto max-w-7xl">
         <Link href="/" className="text-sm font-medium text-green-700 hover:underline">Back to home</Link>
         <Link href="/farmer/dashboard/sales" className="ml-5 text-sm font-medium text-green-700 hover:underline">Sales &amp; Allocation</Link>
+        <Link href="/farmer/dashboard/quality" className="ml-5 text-sm font-medium text-green-700 hover:underline">Quality Observations</Link>
         <div className="mt-6">
           <p className="text-sm font-semibold text-green-700">SMART MANDI</p>
           <h1 className="mt-2 text-3xl font-bold">Farmer Dashboard</h1>
