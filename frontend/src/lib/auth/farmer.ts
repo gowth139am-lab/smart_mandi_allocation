@@ -2,6 +2,19 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { query } from "@/lib/db/postgres";
 
+export async function getFarmerIdForUser(userId: string): Promise<string | null> {
+  const result = await query<{ farmer_id: string }>(
+    `SELECT f.farmer_id::text AS farmer_id
+     FROM farmers f
+     JOIN users u ON u.user_id = f.user_id
+     WHERE f.user_id = $1 AND u.status = 'ACTIVE'
+     LIMIT 1`,
+    [userId],
+  );
+
+  return result.rows[0]?.farmer_id ?? null;
+}
+
 export async function requireFarmer() {
   const session = await auth();
   if (!session?.user) {
@@ -16,16 +29,9 @@ export async function requireFarmer() {
     };
   }
 
-  const result = await query<{ farmer_id: string }>(
-    `SELECT f.farmer_id::text AS farmer_id
-     FROM farmers f
-     JOIN users u ON u.user_id = f.user_id
-     WHERE f.user_id = $1 AND u.status = 'ACTIVE'
-     LIMIT 1`,
-    [session.user.user_id],
-  );
+  const farmerId = await getFarmerIdForUser(session.user.user_id);
 
-  if (result.rowCount === 0) {
+  if (!farmerId) {
     return {
       error: NextResponse.json(
         { message: "Farmer profile not found" },
@@ -34,5 +40,5 @@ export async function requireFarmer() {
     };
   }
 
-  return { farmerId: result.rows[0].farmer_id };
+  return { farmerId };
 }
