@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 type Lot = {
   id: string;
@@ -90,6 +90,13 @@ export default function FarmerSalesPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [uncertainFailure, setUncertainFailure] = useState(false);
+  const [cancelSaleTarget, setCancelSaleTarget] = useState<Sale | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelError, setCancelError] = useState("");
+  const [cancelling, setCancelling] = useState(false);
+  const cancelDialogRef = useRef<HTMLDivElement | null>(null);
+  const cancelReasonRef = useRef<HTMLTextAreaElement | null>(null);
+  const cancelOriginRef = useRef<HTMLButtonElement | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -223,24 +230,72 @@ export default function FarmerSalesPage() {
     setSubmitting(false);
   }
 
-  async function cancelSale(sale: Sale) {
-    if (!window.confirm(`Cancel sale #${sale.id}? Inventory and demand will be restored by PostgreSQL.`)) return;
-    const reason = window.prompt("Optional cancellation reason:", "");
-    if (reason === null) return;
+  const closeCancelDialog = useCallback(() => {
+    if (cancelling) return;
+    setCancelSaleTarget(null);
+    setCancelReason("");
+    setCancelError("");
+    cancelOriginRef.current?.focus();
+  }, [cancelling]);
+
+  useEffect(() => {
+    if (!cancelSaleTarget) return;
+    cancelReasonRef.current?.focus();
+    function handleDialogKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        if (!cancelling) closeCancelDialog();
+        return;
+      }
+      if (event.key !== "Tab" || !cancelDialogRef.current) return;
+      const focusable = Array.from(cancelDialogRef.current.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), textarea:not([disabled])",
+      ));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", handleDialogKeyDown);
+    return () => document.removeEventListener("keydown", handleDialogKeyDown);
+  }, [cancelSaleTarget, cancelling, closeCancelDialog]);
+
+  function openCancelDialog(sale: Sale, origin: HTMLButtonElement) {
+    cancelOriginRef.current = origin;
+    setCancelSaleTarget(sale);
+    setCancelReason("");
+    setCancelError("");
+  }
+
+  async function confirmCancelSale() {
+    if (!cancelSaleTarget || cancelling) return;
+    setCancelError("");
     setError("");
     setMessage("");
+    setCancelling(true);
     try {
-      const response = await fetch(`/api/sales/${encodeURIComponent(sale.id)}/cancel`, {
+      const response = await fetch(`/api/sales/${encodeURIComponent(cancelSaleTarget.id)}/cancel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason }),
+        body: JSON.stringify({ reason: cancelReason }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || "Could not cancel sale");
       setMessage(data.message || "Sale cancelled successfully.");
+      setCancelSaleTarget(null);
+      setCancelReason("");
+      setCancelError("");
+      cancelOriginRef.current?.focus();
       await loadData();
     } catch (reasonValue) {
-      setError(reasonValue instanceof Error ? reasonValue.message : "Could not cancel sale");
+      setCancelError(reasonValue instanceof Error ? reasonValue.message : "Could not cancel sale");
+    } finally {
+      setCancelling(false);
     }
   }
 
@@ -360,7 +415,7 @@ export default function FarmerSalesPage() {
                       <td className="px-3 py-3">
                         <div className="flex gap-3">
                           <Link href={`/farmer/dashboard/sales/${sale.id}`} className="font-semibold text-green-700 hover:underline">View</Link>
-                          {["PENDING", "CONFIRMED"].includes(sale.sale_status) && sale.payment_status !== "PAID" && <button type="button" onClick={() => void cancelSale(sale)} className="font-semibold text-red-600">Cancel</button>}
+                          {["PENDING", "CONFIRMED"].includes(sale.sale_status) && sale.payment_status !== "PAID" && <button type="button" onClick={(event) => openCancelDialog(sale, event.currentTarget)} className="font-semibold text-red-600">Cancel</button>}
                         </div>
                       </td>
                     </tr>
@@ -371,6 +426,43 @@ export default function FarmerSalesPage() {
           )}
         </section>
       </div>
+      {cancelSaleTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-5">
+          <div
+            ref={cancelDialogRef}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="cancel-sale-dialog-title"
+            aria-describedby="cancel-sale-dialog-description"
+            className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl"
+          >
+            <h2 id="cancel-sale-dialog-title" className="text-xl font-bold">Cancel sale #{cancelSaleTarget.id}?</h2>
+            <p id="cancel-sale-dialog-description" className="mt-3 text-sm text-slate-700">
+              Inventory and buyer demand will be restored by PostgreSQL.
+            </p>
+            <label className="mt-5 block text-sm font-medium">
+              Cancellation reason (optional)
+              <textarea
+                ref={cancelReasonRef}
+                value={cancelReason}
+                onChange={(event) => setCancelReason(event.target.value)}
+                disabled={cancelling}
+                className={`${inputClass} min-h-24`}
+                rows={3}
+              />
+            </label>
+            {cancelError && <p role="alert" className="mt-3 rounded-lg bg-red-100 p-3 text-sm text-red-800">{cancelError}</p>}
+            <div className="mt-5 flex justify-end gap-3">
+              <button type="button" onClick={closeCancelDialog} disabled={cancelling} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">
+                Back
+              </button>
+              <button type="button" onClick={() => void confirmCancelSale()} disabled={cancelling} className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+                {cancelling ? "Cancelling..." : "Confirm cancellation"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
