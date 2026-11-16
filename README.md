@@ -57,3 +57,10 @@ npm run test:mongodb
 The MongoDB API test requires an authenticated browser session for the
 protected observation endpoints. Test registration/login first, then run it
 with a session-aware API client if needed.
+
+After initializing the isolated PostgreSQL audit database with sample data,
+run the sale-item immutability regression test:
+
+```powershell
+psql -X -v ON_ERROR_STOP=1 -d smart_mandi_audit_db -f database/postgresql/tests/01_sale_items_immutability.sql
+```
