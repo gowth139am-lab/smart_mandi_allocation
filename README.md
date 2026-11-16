@@ -64,3 +64,7 @@ run the sale-item immutability regression test:
 ```powershell
 psql -X -v ON_ERROR_STOP=1 -d smart_mandi_audit_db -f database/postgresql/tests/01_sale_items_immutability.sql
 ```
+
+The authenticated sales API currently does not provide an idempotency key.
+Clients should not automatically retry `POST /api/sales` without their own
+deduplication until a persistent idempotency design is added.

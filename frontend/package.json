@@ -13,7 +13,8 @@
     "test:farmer-farms": "node scripts/test-farmer-farms.js",
     "test:validation": "node scripts/test-validation-helpers.js",
     "test:buyer-farmer-api": "node scripts/test-buyer-farmer-api-validation.js",
-    "test:auth-session": "node scripts/test-auth-session.js"
+    "test:auth-session": "node scripts/test-auth-session.js",
+    "test:sales-api": "node scripts/test-sales-api.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
