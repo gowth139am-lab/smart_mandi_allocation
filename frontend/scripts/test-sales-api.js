@@ -232,6 +232,25 @@ async function main() {
     const buyerACookie = await login(BUYER_A_USERNAME);
     const buyerBCookie = await login(BUYER_B_USERNAME);
 
+    const salesOptions = await requestJson("/api/farmer/sales/options", {
+      cookie: farmerACookie,
+    });
+    await expectStatus("Farmer can load sale options", salesOptions, 200);
+    assert.ok(
+      salesOptions.data.buyers.some((buyer) => buyer.id === String(fixture.buyerA)),
+      "Sale options must include active buyers",
+    );
+    assert.ok(
+      salesOptions.data.demands.some((demand) => demand.id === String(fixture.demands.demandA1)),
+      "Sale options must include eligible open demands",
+    );
+    console.log("PASS sale options include only farmer-usable reference data");
+    await expectStatus(
+      "Buyer cannot load farmer sale options",
+      await requestJson("/api/farmer/sales/options", { cookie: buyerACookie }),
+      403,
+    );
+
     await expectStatus(
       "Empty allocation list is rejected",
       await createSale(farmerACookie, fixture.buyerA, []),
