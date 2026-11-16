@@ -57,7 +57,8 @@ export default function FarmerSaleDetailsPage() {
 
   async function cancelSale() {
     if (!sale || !window.confirm(`Cancel sale #${sale.id}? Inventory and demand will be restored by PostgreSQL.`)) return;
-    const reason = window.prompt("Optional cancellation reason:", "") ?? "";
+    const reason = window.prompt("Optional cancellation reason:", "");
+    if (reason === null) return;
     setError("");
     setMessage("");
     try {

@@ -185,8 +185,10 @@ export default function FarmerSalesPage() {
     }
 
     setSubmitting(true);
+    let response: Response;
+    let data: { message?: string };
     try {
-      const response = await fetch("/api/sales", {
+      response = await fetch("/api/sales", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -195,13 +197,7 @@ export default function FarmerSalesPage() {
           allocations: rows,
         }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || "Could not create sale");
-      setMessage(data.message || "Sale created successfully.");
-      setBuyerId("");
-      setMarketId("");
-      setRows([emptyRow()]);
-      await loadData();
+      data = await response.json() as { message?: string };
     } catch (reason) {
       if (reason instanceof TypeError || reason instanceof SyntaxError) {
         setUncertainFailure(true);
@@ -209,14 +205,28 @@ export default function FarmerSalesPage() {
       } else {
         setError(reason instanceof Error ? reason.message : "Could not create sale");
       }
-    } finally {
       setSubmitting(false);
+      return;
     }
+
+    if (!response.ok) {
+      setError(data.message || "Could not create sale");
+      setSubmitting(false);
+      return;
+    }
+
+    setMessage(data.message || "Sale created successfully.");
+    setBuyerId("");
+    setMarketId("");
+    setRows([emptyRow()]);
+    await loadData();
+    setSubmitting(false);
   }
 
   async function cancelSale(sale: Sale) {
     if (!window.confirm(`Cancel sale #${sale.id}? Inventory and demand will be restored by PostgreSQL.`)) return;
-    const reason = window.prompt("Optional cancellation reason:", "") ?? "";
+    const reason = window.prompt("Optional cancellation reason:", "");
+    if (reason === null) return;
     setError("");
     setMessage("");
     try {
