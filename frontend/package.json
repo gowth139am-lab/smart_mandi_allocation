@@ -9,7 +9,10 @@
     "lint": "eslint",
     "setup:demo-users": "node scripts/create-demo-users.mjs",
     "setup:mongodb": "node scripts/setup-mongodb.mjs",
-    "test:mongodb": "node scripts/test-mongodb-api.js"
+    "test:mongodb": "node scripts/test-mongodb-api.js",
+    "test:farmer-farms": "node scripts/test-farmer-farms.js",
+    "test:validation": "node scripts/test-validation-helpers.js",
+    "test:buyer-farmer-api": "node scripts/test-buyer-farmer-api-validation.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

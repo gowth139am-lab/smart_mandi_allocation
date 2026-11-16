@@ -1,36 +1,13 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db/postgres";
 import { requireFarmer } from "@/lib/auth/farmer";
+import {
+  parseDateOnly,
+  parsePostgresNumeric,
+  parsePositiveBigintId,
+} from "@/lib/validators/database";
 
 const VALID_GRADES = ["A", "B", "C"];
-const MAX_QUANTITY = 999999999.999;
-
-function isValidDateOnly(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return false;
-  }
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) &&
-    date.toISOString().slice(0, 10) === value;
-}
-
-function parsePositiveInteger(value: unknown): string | null {
-  const text = typeof value === "number" ? String(value) : String(value ?? "").trim();
-  return /^[1-9]\d*$/.test(text) ? text : null;
-}
-
-function parseQuantity(value: unknown): number | null {
-  const quantity = typeof value === "number" ? value : Number(value);
-  if (
-    !Number.isFinite(quantity) ||
-    quantity <= 0 ||
-    quantity > MAX_QUANTITY ||
-    Math.round(quantity * 1000) / 1000 !== quantity
-  ) {
-    return null;
-  }
-  return quantity;
-}
 
 async function getFarmerReference(farmerId: string, farmId: string | null) {
   const result = await query<{ farm_id: string; farm_name: string }>(
@@ -98,34 +75,39 @@ export async function POST(request: Request) {
     const access = await requireFarmer();
     if ("error" in access) return access.error;
 
-    let body: Record<string, unknown>;
+    let body: unknown;
     try {
       body = await request.json();
     } catch {
       return NextResponse.json({ message: "Request body must be valid JSON" }, { status: 400 });
     }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ message: "Request body must be a JSON object" }, { status: 400 });
+    }
+    const data = body as Record<string, unknown>;
 
-    const cropId = parsePositiveInteger(body.cropId);
-    const farmId = body.farmId == null || body.farmId === ""
+    const cropId = parsePositiveBigintId(data.cropId);
+    const farmId = data.farmId == null || data.farmId === ""
       ? null
-      : parsePositiveInteger(body.farmId);
-    const varietyId = body.varietyId == null || body.varietyId === ""
+      : parsePositiveBigintId(data.farmId);
+    const varietyId = data.varietyId == null || data.varietyId === ""
       ? null
-      : parsePositiveInteger(body.varietyId);
-    const quantity = parseQuantity(body.initialQuantity);
-    const harvestDate = body.harvestDate;
-    const expiryDate = body.expiryDate == null || body.expiryDate === ""
+      : parsePositiveBigintId(data.varietyId);
+    const quantity = parsePostgresNumeric(data.initialQuantity, 12, 3, true);
+    const harvestDate = parseDateOnly(data.harvestDate);
+    const hasExpiryDate = data.expiryDate != null && data.expiryDate !== "";
+    const expiryDate = !hasExpiryDate
       ? null
-      : body.expiryDate;
-    const grade = body.grade == null || body.grade === "" ? null : String(body.grade).trim();
+      : parseDateOnly(data.expiryDate);
+    const grade = data.grade == null || data.grade === "" ? null : String(data.grade).trim();
 
     if (
       !cropId ||
-      (body.farmId != null && body.farmId !== "" && !farmId) ||
-      (body.varietyId != null && body.varietyId !== "" && !varietyId) ||
-      !quantity ||
-      !isValidDateOnly(harvestDate) ||
-      (expiryDate !== null && !isValidDateOnly(expiryDate)) ||
+      (data.farmId != null && data.farmId !== "" && !farmId) ||
+      (data.varietyId != null && data.varietyId !== "" && !varietyId) ||
+      quantity === null ||
+      harvestDate === null ||
+      (hasExpiryDate && expiryDate === null) ||
       (expiryDate !== null && expiryDate < harvestDate) ||
       (grade !== null && !VALID_GRADES.includes(grade))
     ) {

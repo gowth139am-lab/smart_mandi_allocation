@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { query } from "@/lib/db/postgres";
+import {
+  parseDateOnly,
+  parsePostgresNumeric,
+  parsePositiveBigintId,
+} from "@/lib/validators/database";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -38,9 +43,7 @@ export async function GET(_request: Request, { params }: RouteContext) {
     const buyerId = access.session.user.buyer_id;
     if (!buyerId) return NextResponse.json({ message: "Buyer access required" }, { status: 403 });
     const { id } = await params;
-    if (!/^[1-9]\d*$/.test(id)) {
-      return NextResponse.json({ message: "Demand not found" }, { status: 404 });
-    }
+    if (!parsePositiveBigintId(id)) return NextResponse.json({ message: "Invalid demand ID" }, { status: 400 });
     const result = await getBuyerDemand(id, buyerId);
     if (result.rowCount === 0) {
       return NextResponse.json({ message: "Demand not found" }, { status: 404 });
@@ -59,28 +62,31 @@ export async function PUT(request: Request, { params }: RouteContext) {
     const buyerId = access.session.user.buyer_id;
     if (!buyerId) return NextResponse.json({ message: "Buyer access required" }, { status: 403 });
     const { id } = await params;
-    if (!/^[1-9]\d*$/.test(id)) {
-      return NextResponse.json({ message: "Demand not found" }, { status: 404 });
-    }
+    if (!parsePositiveBigintId(id)) return NextResponse.json({ message: "Invalid demand ID" }, { status: 400 });
 
-    let body: Record<string, unknown>;
+    let body: unknown;
     try {
       body = await request.json();
     } catch {
       return NextResponse.json({ message: "Request body must be valid JSON" }, { status: 400 });
     }
-    const location = typeof body.location === "string" ? body.location.trim() : "";
-    const grade = body.minimumGrade === "" || body.minimumGrade == null ? null : String(body.minimumGrade).trim();
-    const maximumPrice = body.maximumPrice === "" || body.maximumPrice == null ? null : Number(body.maximumPrice);
-    const requiredDate = body.requiredDate || null;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ message: "Request body must be a JSON object" }, { status: 400 });
+    }
+    const data = body as Record<string, unknown>;
+    const location = typeof data.location === "string" ? data.location.trim() : "";
+    const grade = data.minimumGrade === "" || data.minimumGrade == null ? null : String(data.minimumGrade).trim();
+    const hasMaximumPrice = data.maximumPrice !== "" && data.maximumPrice != null;
+    const maximumPrice = hasMaximumPrice
+      ? parsePostgresNumeric(data.maximumPrice, 12, 2, false)
+      : null;
+    const hasRequiredDate = data.requiredDate !== "" && data.requiredDate != null;
+    const requiredDate = hasRequiredDate ? parseDateOnly(data.requiredDate) : null;
     if (
       !location || location.length > 200 ||
       (grade !== null && !["A", "B", "C"].includes(grade)) ||
-      (maximumPrice !== null && (!Number.isFinite(maximumPrice) || maximumPrice < 0)) ||
-      (requiredDate !== null &&
-        (typeof requiredDate !== "string" ||
-          !/^\d{4}-\d{2}-\d{2}$/.test(requiredDate) ||
-          Number.isNaN(Date.parse(`${requiredDate}T00:00:00Z`))))
+      (hasMaximumPrice && maximumPrice === null) ||
+      (hasRequiredDate && requiredDate === null)
     ) {
       return NextResponse.json({ message: "Please enter valid demand details" }, { status: 400 });
     }
@@ -112,9 +118,7 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
     const buyerId = access.session.user.buyer_id;
     if (!buyerId) return NextResponse.json({ message: "Buyer access required" }, { status: 403 });
     const { id } = await params;
-    if (!/^[1-9]\d*$/.test(id)) {
-      return NextResponse.json({ message: "Demand not found" }, { status: 404 });
-    }
+    if (!parsePositiveBigintId(id)) return NextResponse.json({ message: "Invalid demand ID" }, { status: 400 });
     const result = await query(
       `UPDATE buyer_demands
        SET status = 'CANCELLED'

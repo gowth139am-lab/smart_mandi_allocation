@@ -1,17 +1,9 @@
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db/postgres";
 import { requireFarmer } from "@/lib/auth/farmer";
+import { parseDateOnly, parsePositiveBigintId } from "@/lib/validators/database";
 
 const VALID_GRADES = ["A", "B", "C"];
-
-function isValidDateOnly(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return false;
-  }
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) &&
-    date.toISOString().slice(0, 10) === value;
-}
 
 async function getOwnedLot(id: string, farmerId: string) {
   return query(
@@ -19,9 +11,10 @@ async function getOwnedLot(id: string, farmerId: string) {
             f.farm_name, pl.crop_id::text AS crop_id,
             c.crop_name, c.unit,
             pl.variety_id::text AS variety_id, cv.variety_name,
-            pl.harvest_date, pl.initial_quantity::text AS initial_quantity,
+            pl.harvest_date::text AS harvest_date,
+            pl.initial_quantity::text AS initial_quantity,
             pl.available_quantity::text AS available_quantity,
-            pl.grade, pl.status, pl.expiry_date, pl.created_at
+            pl.grade, pl.status, pl.expiry_date::text AS expiry_date, pl.created_at
      FROM produce_lots pl
      JOIN farms f ON f.farm_id = pl.farm_id
      JOIN crops c ON c.crop_id = pl.crop_id
@@ -32,10 +25,6 @@ async function getOwnedLot(id: string, farmerId: string) {
   );
 }
 
-function validId(id: string) {
-  return /^[1-9]\d*$/.test(id);
-}
-
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -44,7 +33,7 @@ export async function GET(
     const access = await requireFarmer();
     if ("error" in access) return access.error;
     const { id } = await params;
-    if (!validId(id)) return NextResponse.json({ message: "Lot not found" }, { status: 404 });
+    if (!parsePositiveBigintId(id)) return NextResponse.json({ message: "Invalid lot ID" }, { status: 400 });
 
     const result = await getOwnedLot(id, access.farmerId);
     if (result.rowCount === 0) return NextResponse.json({ message: "Lot not found" }, { status: 404 });
@@ -63,41 +52,60 @@ export async function PUT(
     const access = await requireFarmer();
     if ("error" in access) return access.error;
     const { id } = await params;
-    if (!validId(id)) return NextResponse.json({ message: "Lot not found" }, { status: 404 });
+    if (!parsePositiveBigintId(id)) return NextResponse.json({ message: "Invalid lot ID" }, { status: 400 });
 
-    let body: Record<string, unknown>;
+    let body: unknown;
     try {
       body = await request.json();
     } catch {
       return NextResponse.json({ message: "Request body must be valid JSON" }, { status: 400 });
     }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ message: "Request body must be a JSON object" }, { status: 400 });
+    }
+    const data = body as Record<string, unknown>;
 
-    const grade = body.grade == null || body.grade === "" ? null : String(body.grade).trim();
-    const expiryDate = body.expiryDate == null || body.expiryDate === "" ? null : body.expiryDate;
+    const existing = await getOwnedLot(id, access.farmerId);
+    if (existing.rowCount === 0) return NextResponse.json({ message: "Lot not found" }, { status: 404 });
+    const currentLot = existing.rows[0];
+
+    const hasHarvestDate = Object.hasOwn(data, "harvestDate");
+    const hasExpiryDate = Object.hasOwn(data, "expiryDate");
+    const harvestDate = hasHarvestDate
+      ? parseDateOnly(data.harvestDate)
+      : parseDateOnly(currentLot.harvest_date);
+    const expiryDate = hasExpiryDate
+      ? (data.expiryDate === null || data.expiryDate === ""
+        ? null
+        : parseDateOnly(data.expiryDate))
+      : parseDateOnly(currentLot.expiry_date);
+    const grade = Object.hasOwn(data, "grade")
+      ? (data.grade == null || data.grade === "" ? null : String(data.grade).trim())
+      : currentLot.grade;
     if (
-      (grade !== null && !VALID_GRADES.includes(grade)) ||
-      (expiryDate !== null && !isValidDateOnly(expiryDate))
+      harvestDate === null ||
+      (hasExpiryDate && data.expiryDate !== null && data.expiryDate !== "" && expiryDate === null) ||
+      (expiryDate !== null && expiryDate < harvestDate) ||
+      (grade !== null && !VALID_GRADES.includes(grade))
     ) {
-      return NextResponse.json({ message: "Only a valid grade and expiry date may be updated" }, { status: 400 });
+      return NextResponse.json({ message: "Please enter valid harvest date, expiry date, and grade values" }, { status: 400 });
     }
 
     const result = await query(
       `UPDATE produce_lots pl
-       SET grade = $1, expiry_date = $2
+       SET harvest_date = $1, grade = $2, expiry_date = $3
        FROM farms f
-       WHERE pl.lot_id = $3
+       WHERE pl.lot_id = $4
          AND pl.farm_id = f.farm_id
-         AND f.farmer_id = $4
+         AND f.farmer_id = $5
          AND NOT EXISTS (
            SELECT 1 FROM sale_items si WHERE si.lot_id = pl.lot_id
          )
        RETURNING pl.lot_id::text AS id`,
-      [grade, expiryDate, id, access.farmerId],
+      [harvestDate, grade, expiryDate, id, access.farmerId],
     );
 
     if (result.rowCount === 0) {
-      const existing = await getOwnedLot(id, access.farmerId);
-      if (existing.rowCount === 0) return NextResponse.json({ message: "Lot not found" }, { status: 404 });
       return NextResponse.json({ message: "Lots involved in sales cannot be edited" }, { status: 409 });
     }
     return NextResponse.json({ message: "Produce lot updated successfully", id });
@@ -115,7 +123,7 @@ export async function DELETE(
     const access = await requireFarmer();
     if ("error" in access) return access.error;
     const { id } = await params;
-    if (!validId(id)) return NextResponse.json({ message: "Lot not found" }, { status: 404 });
+    if (!parsePositiveBigintId(id)) return NextResponse.json({ message: "Invalid lot ID" }, { status: 400 });
 
     const result = await query(
       `DELETE FROM produce_lots pl

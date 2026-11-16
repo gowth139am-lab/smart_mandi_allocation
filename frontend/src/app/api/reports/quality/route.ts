@@ -1,6 +1,8 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { getMongoDatabase } from "@/lib/db/mongodb";
+import { getFarmerIdForUser } from "@/lib/auth/farmer";
+import { getFarmerQualityLotIds } from "@/lib/db/quality-observations";
 
 export async function GET() {
   try {
@@ -8,14 +10,23 @@ export async function GET() {
     if (!session?.user) {
       return NextResponse.json({ success: false, message: "Unauthorized" }, { status: 401 });
     }
-    if (!["ADMIN", "FARMER", "BUYER"].includes(session.user.role)) {
+    if (session.user.role !== "ADMIN" && session.user.role !== "FARMER") {
       return NextResponse.json({ success: false, message: "Access denied" }, { status: 403 });
+    }
+
+    let lotIds: number[] | null = null;
+    if (session.user.role === "FARMER") {
+      const farmerId = await getFarmerIdForUser(session.user.user_id);
+      if (!farmerId) {
+        return NextResponse.json({ success: false, message: "Farmer profile not found" }, { status: 403 });
+      }
+      lotIds = await getFarmerQualityLotIds(farmerId);
     }
 
     const database = await getMongoDatabase();
     const report = await database.collection("quality_observations").aggregate([
       { $match: {
-        lot_id: { $type: "number" },
+        lot_id: lotIds === null ? { $type: "number" } : { $in: lotIds },
         crop_id: { $type: "number" },
         assessed_grade: { $in: ["A", "B", "C"] },
         inspection_date: { $type: "date" }

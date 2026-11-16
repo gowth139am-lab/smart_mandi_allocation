@@ -1,31 +1,114 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { getMongoDatabase } from "@/lib/db/mongodb";
-import { query } from "@/lib/db/postgres";
+import { getFarmerIdForUser } from "@/lib/auth/farmer";
+import {
+  getFarmerQualityLotIds,
+  getQualityLotReference,
+} from "@/lib/db/quality-observations";
 
 const COLLECTION = "quality_observations";
-const VALID_GRADES = ["A", "B", "C"];
+const VALID_GRADES = new Set(["A", "B", "C"]);
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_DATETIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+
+function errorResponse(message: string, status: number) {
+  return NextResponse.json({ success: false, message }, { status });
+}
+
+function parsePositiveSafeInteger(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
+  }
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function isValidCalendarDate(year: number, month: number, day: number): boolean {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day;
+}
+
+function parseInspectionDate(value: unknown): Date | null {
+  if (value === undefined) return new Date();
+  if (typeof value !== "string") return null;
+
+  const dateOnly = DATE_ONLY_PATTERN.exec(value);
+  const dateTime = ISO_DATETIME_PATTERN.exec(value);
+  const match = dateOnly ?? dateTime;
+  if (!match || !isValidCalendarDate(Number(match[1]), Number(match[2]), Number(match[3]))) {
+    return null;
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isMeasurementRecord(value: unknown): value is Record<string, string | number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+
+  const entries = Object.entries(value);
+  return entries.length > 0 &&
+    entries.length <= 32 &&
+    entries.every(([key, measurement]) =>
+      /^[A-Za-z][A-Za-z0-9_-]{0,49}$/.test(key) &&
+      ((typeof measurement === "number" && Number.isFinite(measurement)) ||
+        (typeof measurement === "string" &&
+          measurement.trim().length > 0 &&
+          measurement.length <= 200)),
+    );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+async function getReadAccess() {
+  const session = await auth();
+  if (!session?.user) return { error: errorResponse("Unauthorized", 401) } as const;
+  if (session.user.role === "ADMIN") return { role: "ADMIN" } as const;
+  if (session.user.role !== "FARMER") {
+    return { error: errorResponse("Access denied", 403) } as const;
+  }
+
+  const farmerId = await getFarmerIdForUser(session.user.user_id);
+  if (!farmerId) {
+    return { error: errorResponse("Farmer profile not found", 403) } as const;
+  }
+  return { role: "FARMER", farmerId } as const;
+}
 
 export async function GET(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user) {
-      return NextResponse.json({ success: false, message: "Unauthorized" }, { status: 401 });
-    }
-    if (!["BUYER", "FARMER", "ADMIN"].includes(session.user.role)) {
-      return NextResponse.json({ success: false, message: "Access denied" }, { status: 403 });
-    }
+    const access = await getReadAccess();
+    if ("error" in access) return access.error;
 
-    const url = new URL(request.url);
-    const lotIdParam = url.searchParams.get("lot_id");
+    const lotIdParam = new URL(request.url).searchParams.get("lot_id");
     const filter: Record<string, unknown> = {};
 
     if (lotIdParam !== null) {
-      const lotId = Number(lotIdParam);
-      if (!Number.isSafeInteger(lotId) || lotId <= 0) {
-        return NextResponse.json({ success: false, message: "lot_id must be a positive integer" }, { status: 400 });
+      const lotId = parsePositiveSafeInteger(lotIdParam);
+      if (lotId === null) {
+        return errorResponse("lot_id must be a positive integer", 400);
+      }
+
+      if (access.role === "FARMER") {
+        const lot = await getQualityLotReference(lotId);
+        if (!lot) return errorResponse("Produce lot not found", 404);
+        if (lot.farmer_id !== access.farmerId) {
+          return errorResponse("You do not own this produce lot", 403);
+        }
       }
       filter.lot_id = lotId;
+    } else if (access.role === "FARMER") {
+      filter.lot_id = { $in: await getFarmerQualityLotIds(access.farmerId) };
     }
 
     const database = await getMongoDatabase();
@@ -35,11 +118,11 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       count: observations.length,
-      observations: observations.map(({ _id, ...rest }) => ({ ...rest, _id: _id.toString() }))
+      observations: observations.map(({ _id, ...rest }) => ({ ...rest, _id: _id.toString() })),
     });
   } catch (error) {
     console.error("Fetching observations failed:", error);
-    return NextResponse.json({ success: false, message: "Could not fetch observations" }, { status: 500 });
+    return errorResponse("Could not fetch observations", 500);
   }
 }
 
@@ -49,58 +132,72 @@ export async function POST(request: Request) {
     if (!session?.user) {
       return NextResponse.json({ success: false, message: "Unauthorized" }, { status: 401 });
     }
-    if (!["FARMER", "ADMIN"].includes(session.user.role)) {
+    if (session.user.role !== "FARMER" && session.user.role !== "ADMIN") {
       return NextResponse.json({ success: false, message: "Only farmers or admins can submit quality observations" }, { status: 403 });
     }
 
-    let body: Record<string, unknown>;
+    let body: unknown;
     try {
-      body = await request.json();
+      body = await request.json() as unknown;
     } catch {
       return NextResponse.json({ success: false, message: "Request body must be valid JSON" }, { status: 400 });
     }
 
-    const { lot_id, crop_id, measurements, assessed_grade, inspection_date } = body;
-    const lotId = typeof lot_id === "number" ? lot_id : Number(lot_id);
-    const cropId = typeof crop_id === "number" ? crop_id : Number(crop_id);
-
-    if (!Number.isSafeInteger(lotId) || lotId <= 0 ||
-        !Number.isSafeInteger(cropId) || cropId <= 0 ||
-        !measurements || typeof measurements !== "object" || Array.isArray(measurements) ||
-        typeof assessed_grade !== "string" || !VALID_GRADES.includes(assessed_grade)) {
-      return NextResponse.json({ success: false, message: "Invalid observation data" }, { status: 400 });
+    if (!isRecord(body)) {
+      return errorResponse("Invalid observation data", 400);
     }
 
-    const date = inspection_date === undefined ? new Date() : new Date(inspection_date as string);
-    if (Number.isNaN(date.getTime()) ||
-        (inspection_date !== undefined && typeof inspection_date !== "string")) {
-      return NextResponse.json({ success: false, message: "inspection_date must be a valid date string" }, { status: 400 });
+    const lotId = parsePositiveSafeInteger(body.lot_id);
+    const cropId = parsePositiveSafeInteger(body.crop_id);
+    const assessedGrade = body.assessed_grade;
+    const date = parseInspectionDate(body.inspection_date);
+
+    if (
+      lotId === null ||
+      cropId === null ||
+      typeof assessedGrade !== "string" ||
+      !VALID_GRADES.has(assessedGrade) ||
+      !isMeasurementRecord(body.measurements)
+    ) {
+      return errorResponse("Invalid observation data", 400);
     }
 
-    const reference = await query<{ crop_name: string }>(
-      `SELECT c.crop_name
-       FROM produce_lots pl JOIN crops c ON c.crop_id = pl.crop_id
-       WHERE pl.lot_id = $1 AND pl.crop_id = $2`,
-      [lotId, cropId]
-    );
+    if (!date) {
+      return errorResponse("inspection_date must be a valid ISO date or datetime", 400);
+    }
 
-    if (reference.rowCount === 0) {
-      return NextResponse.json({ success: false, message: "Produce lot does not exist or does not belong to this crop" }, { status: 400 });
+    const reference = await getQualityLotReference(lotId);
+    if (!reference) {
+      return errorResponse("Produce lot not found", 404);
+    }
+
+    if (session.user.role === "FARMER") {
+      const farmerId = await getFarmerIdForUser(session.user.user_id);
+      if (!farmerId) return errorResponse("Farmer profile not found", 403);
+      if (reference.farmer_id !== farmerId) {
+        return errorResponse("You do not own this produce lot", 403);
+      }
+    }
+
+    if (Number(reference.crop_id) !== cropId) {
+      return errorResponse("crop_id does not match the produce lot", 400);
+    }
+
+    const inspectorId = parsePositiveSafeInteger(session.user.user_id);
+    if (inspectorId === null) {
+      return errorResponse("Invalid authenticated inspector", 500);
     }
 
     const observation = {
       lot_id: lotId,
       crop_id: cropId,
-      crop_name: reference.rows[0].crop_name,
+      crop_name: reference.crop_name,
       inspection_date: date,
       inspector: session.user.name || session.user.email || "Authenticated user",
-      inspector_id: Number(session.user.user_id),
-      measurements,
-      assessed_grade
+      inspector_id: inspectorId,
+      measurements: body.measurements,
+      assessed_grade: assessedGrade,
     };
-    if (!Number.isSafeInteger(observation.inspector_id) || observation.inspector_id <= 0) {
-      return NextResponse.json({ success: false, message: "Invalid authenticated inspector" }, { status: 500 });
-    }
 
     const database = await getMongoDatabase();
     const result = await database.collection(COLLECTION).insertOne(observation);
