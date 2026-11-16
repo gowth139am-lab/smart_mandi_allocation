@@ -251,5 +251,27 @@ AFTER INSERT ON sale_items
 FOR EACH ROW
 EXECUTE FUNCTION update_sale_total();
 
+
+-- ==========================================
+-- 6. SALE ITEM IMMUTABILITY
+-- ==========================================
+
+CREATE OR REPLACE FUNCTION prevent_sale_item_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'Sale items are immutable after insertion';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_immutable_sale_item
+ON sale_items;
+
+CREATE TRIGGER trg_immutable_sale_item
+BEFORE UPDATE OR DELETE ON sale_items
+FOR EACH ROW
+EXECUTE FUNCTION prevent_sale_item_mutation();
+
 COMMIT;
 
