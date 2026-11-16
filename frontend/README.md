@@ -130,15 +130,37 @@ This integration script verifies read/update/delete isolation, invalid and
 missing IDs, invalid dates and NUMERIC values, and unauthenticated access. It
 does not create, update, delete, or reset database records.
 
-The Auth.js session invalidation integration test verifies inactive-user,
-role-change, missing-buyer-profile, and logout behavior. It temporarily changes
-the configured buyer and restores its original user/profile fields in a
-`finally` block. Use only a disposable `smart_mandi_test_*` database with an
-active buyer fixture that has no dependent records preventing profile removal:
+The Auth.js session integration test logs in as the dedicated
+`auth_session_fixture` buyer through the real Auth.js CSRF and credentials
+callback endpoints. It resolves that account's ID from PostgreSQL, verifies its
+active buyer profile, and tests inactive-user, role-change,
+missing-buyer-profile, and logout behavior. It temporarily changes only that
+fixture and restores its original role, status, and buyer profile in `finally`
+cleanup. The buyer fixture must have no dependent records preventing temporary
+profile removal. Use only a disposable `smart_mandi_test_*` database:
 
 ```powershell
+$env:BASE_URL = "http://localhost:3000"
 $env:DATABASE_URL = "postgresql://<user>:<password>@localhost:5432/smart_mandi_test_auth"
-$env:TEST_SESSION_BUYER_COOKIE = "authjs.session-token=<active buyer session>"
-$env:TEST_SESSION_BUYER_USER_ID = "<buyer users.user_id with no dependent records>"
+$env:TEST_SESSION_BUYER_USERNAME = "auth_session_fixture"
+$secret = Read-Host "Test buyer password" -AsSecureString
+$env:TEST_SESSION_BUYER_PASSWORD = [System.Net.NetworkCredential]::new("", $secret).Password
 npm run test:auth-session
+Remove-Item Env:\TEST_SESSION_BUYER_PASSWORD
 ```
+
+`BASE_URL` defaults to `http://localhost:3000`. The test refuses any database
+whose name does not start with `smart_mandi_test_`, and refuses usernames other
+than the dedicated fixture. The password is entered as a hidden PowerShell
+prompt and kept only in the current process environment; do not put it in a
+script, `.env` file committed to Git, or command-line argument.
+
+The test checks the session endpoint response and independently inspects all
+`Set-Cookie` headers for the configured Auth.js session-cookie name. For account
+invalidation it reports whether the cookie was cleared, expired, or left
+present; a `null` session response alone does not prove the browser cookie was
+removed. Logout must set `Max-Age` to zero or less, or a past `Expires` value
+for that cookie; an empty cookie value without expiration is reported but does
+not pass the logout-clearance check. JWT logout clears the browser cookie, but
+there is no server-side token-revocation record, so a separately copied JWT may
+remain replayable until expiry if the account later becomes valid again.
