@@ -43,8 +43,8 @@ async function main() {
       },
       {
         $sort: {
-          cropId: 1,
-          overallGrade: 1
+          crop_id: 1,
+          assessed_grade: 1
         }
       }
     ]).toArray();

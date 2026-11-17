@@ -76,7 +76,37 @@ export async function GET(request: Request) {
       );
     }
 
-    const dateParams = [from, to];
+    const maximumMonths = 36;
+    const shiftMonth = (value: string, delta: number, day: "first" | "same" = "same") => {
+      const [year, month, date] = value.split("-").map(Number);
+      const monthIndex = year * 12 + month - 1 + delta;
+      const boundedMonthIndex = Math.min(9999 * 12 + 11, Math.max(12, monthIndex));
+      const targetYear = Math.floor(boundedMonthIndex / 12);
+      const targetMonth = boundedMonthIndex % 12 + 1;
+      const leapYear = targetYear % 4 === 0 && (targetYear % 100 !== 0 || targetYear % 400 === 0);
+      const daysInTargetMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][targetMonth - 1];
+      const targetDay = day === "first"
+        ? 1
+        : Math.min(date, daysInTargetMonth);
+      return `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(targetDay).padStart(2, "0")}`;
+    };
+    const today = new Date();
+    const defaultTo = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, "0")}-${String(today.getUTCDate()).padStart(2, "0")}`;
+    const defaultFromDate = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 11, 1));
+    const defaultFrom = `${defaultFromDate.getUTCFullYear()}-${String(defaultFromDate.getUTCMonth() + 1).padStart(2, "0")}-01`;
+    const effectiveFrom = from ?? (to ? shiftMonth(to, -(maximumMonths - 1), "first") : defaultFrom);
+    const effectiveTo = to ?? (from ? shiftMonth(from, maximumMonths - 1) : defaultTo);
+    const startMonth = new Date(`${effectiveFrom}T00:00:00Z`);
+    const endMonth = new Date(`${effectiveTo}T00:00:00Z`);
+    const monthSpan = (endMonth.getUTCFullYear() - startMonth.getUTCFullYear()) * 12 + endMonth.getUTCMonth() - startMonth.getUTCMonth();
+    if (monthSpan >= maximumMonths) {
+      return NextResponse.json(
+        { success: false, message: `The reporting range cannot exceed ${maximumMonths} calendar months` },
+        { status: 400 },
+      );
+    }
+
+    const dateParams = [effectiveFrom, effectiveTo];
     const [
       totalsResult,
       statusesResult,
@@ -127,15 +157,29 @@ export async function GET(request: Request) {
         dateParams,
       ),
       query<MonthlyRow>(
-        `SELECT TO_CHAR(DATE_TRUNC('month', sale_date), 'YYYY-MM') AS month,
-                COUNT(*)::text AS sales_count,
-                COALESCE(SUM(total_amount), 0)::text AS total_sale_amount
-         FROM sale_summary_view
-         WHERE sale_status <> 'CANCELLED'
-           AND ($1::date IS NULL OR sale_date >= $1::date)
-           AND ($2::date IS NULL OR sale_date <= $2::date)
-         GROUP BY DATE_TRUNC('month', sale_date)
-         ORDER BY DATE_TRUNC('month', sale_date)`,
+        `WITH RECURSIVE month_calendar(month_start, end_month) AS (
+           SELECT DATE_TRUNC('month', $1::date)::date,
+                  DATE_TRUNC('month', $2::date)::date
+           UNION ALL
+           SELECT (month_start + INTERVAL '1 month')::date, end_month
+           FROM month_calendar
+           WHERE month_start < end_month
+         ), filtered_month_sales AS (
+           SELECT DATE_TRUNC('month', sale_date)::date AS month_start,
+                  COUNT(*) AS sales_count,
+                  COALESCE(SUM(total_amount), 0) AS total_sale_amount
+           FROM sale_summary_view
+           WHERE sale_status <> 'CANCELLED'
+             AND sale_date >= $1::date
+             AND sale_date <= $2::date
+           GROUP BY DATE_TRUNC('month', sale_date)::date
+         )
+         SELECT TO_CHAR(calendar.month_start, 'YYYY-MM') AS month,
+                COALESCE(month_sales.sales_count, 0)::text AS sales_count,
+                COALESCE(month_sales.total_sale_amount, 0)::text AS total_sale_amount
+         FROM month_calendar calendar
+         LEFT JOIN filtered_month_sales month_sales USING (month_start)
+         ORDER BY calendar.month_start`,
         dateParams,
       ),
       query<CropRow>(
@@ -180,7 +224,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       success: true,
-      filters: { from, to },
+      filters: { from: effectiveFrom, to: effectiveTo },
       summary: {
         totalSales: totals.total_sales,
         totalSaleAmount: totals.total_sale_amount,
