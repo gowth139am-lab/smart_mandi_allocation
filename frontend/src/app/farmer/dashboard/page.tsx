@@ -253,6 +253,7 @@ export default function FarmerDashboard() {
         <Link href="/farmer/dashboard/sales" className="ml-5 text-sm font-medium text-green-700 hover:underline">Sales &amp; Allocation</Link>
         <Link href="/farmer/dashboard/quality" className="ml-5 text-sm font-medium text-green-700 hover:underline">Quality Observations</Link>
         <Link href="/farmer/dashboard/market-prices" className="ml-5 text-sm font-medium text-green-700 hover:underline">Market Prices</Link>
+        <Link href="/logout" className="ml-5 text-sm font-medium text-green-700 hover:underline">Sign out</Link>
         <div className="mt-6">
           <p className="text-sm font-semibold text-green-700">SMART MANDI</p>
           <h1 className="mt-2 text-3xl font-bold">Farmer Dashboard</h1>

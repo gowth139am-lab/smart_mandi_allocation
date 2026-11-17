@@ -46,6 +46,7 @@ export default function BuyerDashboardPage() {
           <Link href="/buyer/dashboard/demands/new" className="rounded-lg bg-green-700 px-5 py-3 text-sm font-semibold text-white hover:bg-green-800">
             + Create New Demand
           </Link>
+          <Link href="/logout" className="text-sm font-medium text-green-700 hover:underline">Sign out</Link>
         </div>
 
         <section className="mt-8 grid gap-4 sm:grid-cols-3">

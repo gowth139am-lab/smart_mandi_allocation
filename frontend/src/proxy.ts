@@ -6,8 +6,11 @@ export default auth((request) => {
   const user = request.auth?.user;
   const role = user?.role;
 
-  // Login must remain accessible when the user is signed out.
-  if (path === "/login" || path === "/register") {
+  // Keep login available to authenticated users who want to switch accounts.
+  if (path === "/login") return NextResponse.next();
+
+  // Signed-in users should not start a second public registration flow.
+  if (path === "/register") {
     if (!user) return NextResponse.next();
 
     const target =
