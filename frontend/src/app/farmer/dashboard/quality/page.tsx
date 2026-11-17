@@ -27,6 +27,12 @@ type MeasurementRow = {
   value: string;
 };
 
+type ObservationEdit = {
+  inspectionDate: string;
+  assessedGrade: string;
+  measurements: MeasurementRow[];
+};
+
 const today = new Date().toISOString().slice(0, 10);
 const emptyMeasurement = (): MeasurementRow => ({ name: "", value: "" });
 
@@ -41,6 +47,10 @@ function parseMeasurementValue(value: string): string | number {
   return value;
 }
 
+function inputDate(value: string) {
+  return value.slice(0, 10);
+}
+
 export default function FarmerQualityPage() {
   const [lots, setLots] = useState<Lot[]>([]);
   const [observations, setObservations] = useState<Observation[]>([]);
@@ -52,6 +62,9 @@ export default function FarmerQualityPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<ObservationEdit | null>(null);
+  const [savingObservation, setSavingObservation] = useState(false);
 
   const selectedLot = useMemo(
     () => lots.find((lot) => lot.id === lotId),
@@ -149,7 +162,7 @@ export default function FarmerQualityPage() {
       if (!row.value.trim() || row.value.length > 200) {
         throw new Error(`Enter a value of 200 characters or fewer for ${name}.`);
       }
-      if (record[name] !== undefined) {
+      if (Object.prototype.hasOwnProperty.call(record, name)) {
         throw new Error(`The attribute ${name} is repeated.`);
       }
       record[name] = parseMeasurementValue(row.value);
@@ -201,6 +214,72 @@ export default function FarmerQualityPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function beginEdit(observation: Observation) {
+    if (!observation._id) return;
+    setEditingId(observation._id);
+    setEditForm({
+      inspectionDate: inputDate(observation.inspection_date),
+      assessedGrade: observation.assessed_grade,
+      measurements: Object.entries(observation.measurements).map(([name, value]) => ({ name, value: String(value) })),
+    });
+    setError(""); setMessage("");
+  }
+
+  function buildEditMeasurements(rows: MeasurementRow[]) {
+    const record: Record<string, string | number> = {};
+    for (const row of rows) {
+      const name = row.name.trim();
+      if (!name && !row.value.trim()) continue;
+      if (!/^[A-Za-z][A-Za-z0-9_-]{0,49}$/.test(name) || !row.value.trim() || row.value.length > 200) {
+        throw new Error("Enter valid measurement names and values (up to 200 characters). ");
+      }
+      if (Object.prototype.hasOwnProperty.call(record, name)) throw new Error(`The attribute ${name} is repeated.`);
+      record[name] = parseMeasurementValue(row.value);
+    }
+    if (!Object.keys(record).length || Object.keys(record).length > 32) {
+      throw new Error("Add between 1 and 32 quality attributes.");
+    }
+    return record;
+  }
+
+  async function updateObservation(observationId: string) {
+    if (!editForm) return;
+    setError(""); setMessage(""); setSavingObservation(true);
+    try {
+      const response = await fetch(`/api/quality-observations/${encodeURIComponent(observationId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inspection_date: editForm.inspectionDate,
+          assessed_grade: editForm.assessedGrade,
+          measurements: buildEditMeasurements(editForm.measurements),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Could not update quality observation");
+      setMessage(data.message || "Quality observation updated.");
+      setEditingId(null); setEditForm(null);
+      await loadData();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not update quality observation");
+    } finally { setSavingObservation(false); }
+  }
+
+  async function deleteObservation(observation: Observation) {
+    if (!observation._id || !window.confirm("Delete this quality observation? This cannot be undone.")) return;
+    setError(""); setMessage(""); setSavingObservation(true);
+    try {
+      const response = await fetch(`/api/quality-observations/${encodeURIComponent(observation._id)}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Could not delete quality observation");
+      setMessage(data.message || "Quality observation deleted.");
+      if (editingId === observation._id) { setEditingId(null); setEditForm(null); }
+      await loadData();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not delete quality observation");
+    } finally { setSavingObservation(false); }
   }
 
   const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm";
@@ -363,10 +442,29 @@ export default function FarmerQualityPage() {
                         Lot #{observation.lot_id} · {formatDate(observation.inspection_date)}
                       </p>
                     </div>
-                    <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-bold text-green-800">
-                      Grade {observation.assessed_grade}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-bold text-green-800">Grade {observation.assessed_grade}</span>
+                      {observation._id && <button type="button" onClick={() => beginEdit(observation)} className="text-sm font-semibold text-green-700 hover:underline" disabled={savingObservation}>Edit</button>}
+                      {observation._id && <button type="button" onClick={() => void deleteObservation(observation)} className="text-sm font-semibold text-red-700 hover:underline" disabled={savingObservation}>Delete</button>}
+                    </div>
                   </div>
+                  {editingId === observation._id && editForm && (
+                    <div className="mt-4 space-y-3 rounded-lg bg-slate-50 p-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="text-sm font-medium">Observation date<input type="date" value={editForm.inspectionDate} onChange={(event) => setEditForm({ ...editForm, inspectionDate: event.target.value })} className={inputClass} disabled={savingObservation} /></label>
+                        <label className="text-sm font-medium">Assessed grade<select value={editForm.assessedGrade} onChange={(event) => setEditForm({ ...editForm, assessedGrade: event.target.value })} className={inputClass} disabled={savingObservation}><option>A</option><option>B</option><option>C</option></select></label>
+                      </div>
+                      <div className="space-y-2">{editForm.measurements.map((row, index) => <div key={`${observation._id}-${index}`} className="grid gap-2 sm:grid-cols-2">
+                        <input aria-label={`Measurement ${index + 1} name`} value={row.name} onChange={(event) => setEditForm({ ...editForm, measurements: editForm.measurements.map((item, rowIndex) => rowIndex === index ? { ...item, name: event.target.value } : item) })} className={inputClass} disabled={savingObservation} />
+                        <input aria-label={`Measurement ${index + 1} value`} value={row.value} onChange={(event) => setEditForm({ ...editForm, measurements: editForm.measurements.map((item, rowIndex) => rowIndex === index ? { ...item, value: event.target.value } : item) })} className={inputClass} disabled={savingObservation} />
+                      </div>)}</div>
+                      <div className="flex gap-3">
+                        <button type="button" onClick={() => setEditForm({ ...editForm, measurements: [...editForm.measurements, emptyMeasurement()] })} disabled={savingObservation || editForm.measurements.length >= 32} className="text-sm font-semibold text-green-700 hover:underline">+ Add attribute</button>
+                        <button type="button" onClick={() => void updateObservation(observation._id!)} disabled={savingObservation} className="text-sm font-semibold text-green-700 hover:underline">{savingObservation ? "Saving..." : "Save changes"}</button>
+                        <button type="button" onClick={() => { setEditingId(null); setEditForm(null); }} disabled={savingObservation} className="text-sm text-slate-600 hover:underline">Cancel</button>
+                      </div>
+                    </div>
+                  )}
                   <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
                     {Object.entries(observation.measurements).map(([name, value]) => (
                       <div key={name} className="rounded bg-slate-50 px-2 py-1">

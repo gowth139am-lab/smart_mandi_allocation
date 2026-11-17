@@ -9,56 +9,16 @@ import {
 } from "@/lib/db/quality-observations";
 import { parsePositiveBigintId } from "@/lib/validators/database";
 import { Long } from "mongodb";
+import {
+  isMeasurementRecord,
+  isRecord,
+  parseInspectionDate,
+  VALID_QUALITY_GRADES,
+} from "@/lib/validators/quality-observation";
 
 const COLLECTION = "quality_observations";
-const VALID_GRADES = new Set(["A", "B", "C"]);
-const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-const ISO_DATETIME_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
-
 function errorResponse(message: string, status: number) {
   return NextResponse.json({ success: false, message }, { status });
-}
-
-function isValidCalendarDate(year: number, month: number, day: number): boolean {
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day;
-}
-
-function parseInspectionDate(value: unknown): Date | null {
-  if (value === undefined) return new Date();
-  if (typeof value !== "string") return null;
-
-  const dateOnly = DATE_ONLY_PATTERN.exec(value);
-  const dateTime = ISO_DATETIME_PATTERN.exec(value);
-  const match = dateOnly ?? dateTime;
-  if (!match || !isValidCalendarDate(Number(match[1]), Number(match[2]), Number(match[3]))) {
-    return null;
-  }
-
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function isMeasurementRecord(value: unknown): value is Record<string, string | number> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-
-  const entries = Object.entries(value);
-  return entries.length > 0 &&
-    entries.length <= 32 &&
-    entries.every(([key, measurement]) =>
-      /^[A-Za-z][A-Za-z0-9_-]{0,49}$/.test(key) &&
-      ((typeof measurement === "number" && Number.isFinite(measurement)) ||
-        (typeof measurement === "string" &&
-          measurement.trim().length > 0 &&
-          measurement.length <= 200)),
-    );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function serializeObservation<T extends Record<string, unknown>>(observation: T) {
@@ -156,13 +116,13 @@ export async function POST(request: Request) {
     const lotId = parsePositiveBigintId(body.lot_id);
     const cropId = parsePositiveBigintId(body.crop_id);
     const assessedGrade = body.assessed_grade;
-    const date = parseInspectionDate(body.inspection_date);
+    const date = body.inspection_date === undefined ? new Date() : parseInspectionDate(body.inspection_date);
 
     if (
       !lotId ||
       !cropId ||
       typeof assessedGrade !== "string" ||
-      !VALID_GRADES.has(assessedGrade) ||
+      !VALID_QUALITY_GRADES.has(assessedGrade) ||
       !isMeasurementRecord(body.measurements)
     ) {
       return errorResponse("Invalid observation data", 400);

@@ -110,7 +110,10 @@ export default function AdminSalesReportPage() {
       if (!response.ok) {
         throw new Error(apiMessage(data, "Could not load sales report"));
       }
-      setReport(data as SalesReport);
+      const reportData = data as SalesReport;
+      setReport(reportData);
+      setFrom(reportData.filters.from ?? "");
+      setTo(reportData.filters.to ?? "");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not load sales report");
     } finally {
