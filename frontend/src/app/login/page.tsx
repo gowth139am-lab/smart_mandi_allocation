@@ -49,6 +49,9 @@ export default function LoginPage() {
         <p className="text-center text-sm text-gray-600">
           New to Smart Mandi? <Link href="/register" className="font-semibold text-green-700 hover:underline">Create an account</Link>
         </p>
+        <p className="text-center text-sm text-gray-600">
+          Need to switch accounts? <Link href="/logout" className="font-semibold text-green-700 hover:underline">Sign out first</Link>
+        </p>
         <p className="text-center text-xs text-gray-500">Secure role-based access for farmers, buyers and administrators.</p>
       </form>
     </main>
